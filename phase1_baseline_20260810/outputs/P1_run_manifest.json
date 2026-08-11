@@ -1,0 +1,99 @@
+{
+  "schema_version": "1.0",
+  "phase": 1,
+  "status": "complete",
+  "started_at": "2026-08-11T09:52:31.467558+05:30",
+  "completed_at": "2026-08-11T09:52:31.467558+05:30",
+  "screening_date": "2026-08-11",
+  "financial_data_cutoff": "2026-03-31",
+  "price_date": "2026-08-10",
+  "technical_data_cutoff": "2026-08-10",
+  "universe_claim": "partial",
+  "universe_description": "Full NSE main-board series-EQ equity universe (2,086 symbols from NSE EQUITY_L.csv). BSE-only listings, SME-platform scrips, ETFs, REITs/InvITs and non-EQ series are outside the frame. Not a combined NSE+BSE universe.",
+  "counts": {
+    "evaluated": 2086,
+    "eligible": 987,
+    "selected": 150
+  },
+  "archetype_counts_selected": {
+    "Quality compounder": 53,
+    "High-growth company": 34,
+    "Cyclical recovery": 19,
+    "Mature value/yield company": 16,
+    "Capex operating-leverage candidate": 10,
+    "Financial compounder": 8,
+    "Event-driven or special situation": 6,
+    "Asset-value/SOTP opportunity": 3,
+    "Turnaround": 1
+  },
+  "technical_stage_counts_selected": {
+    "Early Stage 2": 50,
+    "Early Stage 1": 41,
+    "Mature/extended Stage 2": 26,
+    "Stage 4 decline": 20,
+    "Mature Stage 1 base": 8,
+    "Stage 3 distribution": 5
+  },
+  "exclusion_counts": {
+    "EX_MCAP_BELOW_BAND": 510,
+    "EX_NO_MCAP": 307,
+    "EX_MCAP_ABOVE_BAND": 118,
+    "EX_NO_PRICE_HISTORY": 71,
+    "EX_ILLIQUID": 51,
+    "EX_SHORT_FIN_HISTORY": 39,
+    "EX_NO_ARCHETYPE": 3
+  },
+  "files": [
+    {
+      "name": "P1_screened_universe.csv",
+      "row_count": 2086,
+      "sha256": "a0ba713fa3bd878130cf219d36b977f1b0de27644afc12f816d8da1deca4b4e0"
+    },
+    {
+      "name": "P1_candidates.csv",
+      "row_count": 150,
+      "sha256": "e5cacefc1695f11c3d286f39a27279a7a223d1ccb7db2876b89058aae894ad93"
+    },
+    {
+      "name": "P1_source_log.csv",
+      "row_count": 3237,
+      "sha256": "d00a03eca90c1ab8a04094c21d691dc9f01c07e54ea6d6397a64bc9f615fd4c1"
+    },
+    {
+      "name": "P1_summary.md",
+      "row_count": null,
+      "sha256": "86f6eca16fe14e1a8e6322204e1300962cfa9719c670eb1648236857eee878bc"
+    }
+  ],
+  "data_sources": {
+    "primary": [
+      "NSE EQUITY_L.csv",
+      "NSE UDiFF bhavcopy 2026-08-10",
+      "NSE index constituent files",
+      "NSE corporate announcements API"
+    ],
+    "secondary": [
+      "screener.in company pages",
+      "Yahoo Finance adjusted weekly OHLCV"
+    ]
+  },
+  "known_limitations": [
+    "BSE-only listed companies were not screened",
+    "Fundamentals sourced from an aggregator (secondary), not directly from filings",
+    "Reported earnings only - no normalisation for exceptional items",
+    "Net debt approximated by gross borrowings; cash not separately available",
+    "Promoter pledging not captured",
+    "Auditor qualifications, related-party transactions and CWIP ageing not assessed",
+    "Capex evidence is balance-sheet inference, not verified commissioning",
+    "Corporate-event flags are keyword-classified, not read in full",
+    "Liquidity is a weekly-derived substitute for a true daily 3-month median",
+    "No forward consensus estimates available; all growth figures are realised"
+  ],
+  "resume_instructions": "Phase 1 is complete; no resume required. To rebuild: run scripts 01, 02, 03, 05 (all resume-safe and cache to data/), then 04, 06, 07. To refresh only prices and technicals, delete data/prices/ and rerun 03 then 04, 06, 07.",
+  "phase2_handoff_package": [
+    "P1_candidates.csv",
+    "P1_summary.md",
+    "P1_source_log.csv",
+    "P1_run_manifest.json"
+  ]
+}

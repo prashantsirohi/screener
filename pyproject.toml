@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "market-screener"
+version = "0.1.0"
+description = "Persistent Indian-equity screening system: incremental sync into Postgres, DuckDB analytics, three-phase screen"
+requires-python = ">=3.11"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "duckdb>=1.1",
+    "pyarrow>=15",
+    "pandas>=2.2",
+    "requests>=2.31",
+    "lxml>=5",
+    "cssselect>=1.2",
+    "python-dotenv>=1.0",
+    "PyYAML>=6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov"]
+
+[project.scripts]
+screener = "market_screener.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+market_screener = [
+    "db/migrations/*.sql",
+    "db/queries/*.sql",
+    "analytics/sql/*.sql",
+    "resources/*.yaml",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: requires a live Postgres",
+    "parity: compares the port against the frozen legacy oracle",
+]

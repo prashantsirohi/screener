@@ -1,0 +1,28 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Fetched and derived data. All of it is reproducible from the sync layer;
+# data/ alone runs to ~170MB of scraped pages, price series and announcements.
+data/
+reports/
+logs/
+*.duckdb
+*.parquet
+
+# Superseded by reports/runs/<run_id>/output/ - kept locally, not tracked.
+phase1/
+phase2/
+phase3/
+
+# The frozen parity oracle IS tracked (its CSVs are the acceptance baseline),
+# but the intermediate pickle is not: 1.7MB, regenerable, and pandas pickles are
+# fragile across versions.
+phase1_baseline_20260810/phase1_full.pkl

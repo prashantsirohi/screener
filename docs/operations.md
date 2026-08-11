@@ -1,0 +1,160 @@
+# Operations
+
+## First-time setup
+
+```bash
+python -m pip install -e ".[dev]"
+cp .env.example .env
+screener doctor
+screener migrate
+```
+
+`doctor` is the diagnostic to reach for first — it reports the Python version,
+Postgres reachability, whether the DuckDB `postgres` extension loaded, the
+resolved data/report/log roots, and the migration head.
+
+If the DuckDB extension cannot be downloaded (restricted host), set
+`SCREENER_ANALYTICS_MODE=parquet` and run `screener export-parquet`; the analytics
+SQL is written against the same views either way.
+
+## Configuration
+
+Environment variables, or a `.env` alongside `pyproject.toml`.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SCREENER_PG_HOST` / `PORT` / `DATABASE` / `USER` | `127.0.0.1` / `5432` / `market_screener` / `postgres` | |
+| `SCREENER_PG_PASSWORD` | unset | Omitted from the conninfo when unset, which suits `trust` auth on loopback |
+| `SCREENER_ANALYTICS_MODE` | `attach` | `attach` or `parquet` |
+| `SCREENER_PRICE_BASIS` | `yahoo_adjclose` | `yahoo_adjclose` or `split_bonus`. See the cutover note below |
+| `SCREENER_SESSION_COOKIE` | unset | Optional screener.in session cookie. Do not automate login; check their terms |
+| `DATA_ROOT` / `REPORTS_ROOT` / `LOGS_ROOT` | `./data`, `./reports`, `./logs` | Move artifacts off the project tree |
+| `SCREENER_LOG_LEVEL` | `INFO` | |
+
+Non-secret tuning (market-cap band, liquidity floor, candidate target) lives in
+`config.py` so it shows up in diffs. It is folded into `config_hash`, which is
+recorded on every run.
+
+## Daily operation
+
+```bash
+screener sync --source prices        # incremental from the watermark
+screener derive --what all           # actions, adjusted, weekly, reconcile
+screener screen                      # Phase 1
+```
+
+An unchanged re-run is cheap: `s80` skips on a matching input hash and carries
+the previous run's rows forward, so the artifacts are still produced.
+
+### Fundamentals
+
+Do **not** refresh all 2,086 companies on a schedule — that is what provoked the
+throttle in the first place. The staleness gate keeps steady state near 25 pages
+a day. Work the retry queue on a drip instead:
+
+```bash
+screener sync --source fundamentals --retry-queue --max-days 50
+```
+
+Three or four runs a day clears a backlog of a few hundred over a few days at a
+request rate the site has no reason to throttle.
+
+### Suggested Task Scheduler entries
+
+| When | Command |
+|---|---|
+| Weekdays 19:30 IST | `screener sync --source prices && screener derive --what all` |
+| Weekdays 20:00 IST | `screener screen` |
+| Every 6 hours | `screener sync --source fundamentals --retry-queue --max-days 50` |
+
+Prices are gated on publication time, so 19:30 is the earliest a same-day
+bhavcopy can be relied on.
+
+## Backfilling
+
+```bash
+screener sync --source prices --backfill 1100   # ~3 years; roughly 30 minutes
+screener derive --what all
+```
+
+The walker probes every calendar day including weekends (NSE holds occasional
+Saturday and Sunday sessions) and records each answer in the trading calendar, so
+the probe cost is paid once. Failure is isolated per date.
+
+After any backfill, re-run `derive --what all`: corporate-action inference,
+adjusted prices and weekly bars are all functions of the daily series.
+
+## Monitoring
+
+```bash
+screener status
+```
+
+Reports row counts, per-source watermarks with their last status, retry-queue
+depth by state, and how many pages are quarantined.
+
+Worth watching:
+
+- **Retry queue `pending` not falling.** The drip is not running, or the source
+  is refusing.
+- **`exhausted` rows.** Six attempts failed. Those companies are absent from the
+  screen; investigate before trusting a run's coverage.
+- **`sync_batch` rows stuck in `running`.** A process died. The next run reaps
+  them to `interrupted`.
+- **Reconciliation verdicts.** A rising `missed_action` count means corporate
+  actions are being missed.
+
+## Recovering from a failure
+
+**A killed run.** `screener screen --resume` continues the most recent unfinished
+run for that `as_of` at the right stage.
+
+**A stage failed.** The error is in `screen_stage.error` for that run. Fix, then
+re-run — completed stages are skipped.
+
+**A parser bug.** Fix the parser and run `screener rebuild-facts`. Raw payloads
+are retained precisely so a fix can be replayed across every page already
+collected, with no re-fetching and no dependence on the original files.
+
+**Migration drift.** `screener migrate --verify` reports it. A migration edited
+after being applied halts the runner rather than layering onto an unknown base;
+resolve by hand.
+
+**Stranded retry claims.** A crash mid-claim leaves rows `in_flight`; the lease
+timeout returns them to `pending` on the next drain.
+
+## The price-basis cutover
+
+The technical layer currently runs on `yahoo_adjclose`. Moving to `split_bonus`
+(bhavcopy, price return) is deliberate and has a precondition:
+
+**The benchmark indices exist only on the Yahoo basis.** Bhavcopy carries no index
+series, and relative strength divides a stock by a benchmark — both must be on
+the same basis. A price-return run needs price-return index series first;
+`load_all_weekly` raises `BasisIncoherent` rather than producing biased RS.
+
+When those exist:
+
+1. Confirm reconciliation is healthy (`derive --what reconcile`).
+2. Set `SCREENER_PRICE_BASIS=split_bonus`.
+3. Run `screener screen --force` and diff the stage assignments against the
+   previous run.
+4. Every flip should be explicable by the total-return-versus-price-return
+   difference. Anything else is a missing corporate action.
+
+Never flip securities and benchmarks in separate runs.
+
+## Testing
+
+```bash
+pytest                # everything, ~3.5 minutes
+pytest tests/unit     # fast, no database, no network
+pytest tests/parity   # the acceptance gate
+```
+
+Integration tests create and drop a throwaway database per test, and skip
+cleanly when no Postgres is reachable. HTTP tests run against recorded fixtures
+with no live network.
+
+If a parity test fails, the port changed an answer. Before adjusting the test,
+establish which side is right — the failure is doing its job.
