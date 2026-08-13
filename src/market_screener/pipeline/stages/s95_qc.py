@@ -15,6 +15,7 @@ import logging
 
 import pandas as pd
 
+from ...domain import eligibility
 from ...domain.archetypes import ARCHETYPES
 from ...domain.eligibility import EXCLUSION_CODES
 from ...domain.weinstein import STAGES
@@ -191,6 +192,23 @@ def run(ctx: RunContext) -> StageResult:
 
     dup_sym = uni["symbol"].duplicated().sum()
     check("QC18", "No duplicate symbols", dup_sym == 0, f"{dup_sym} duplicates")
+
+    # A configured gate that excluded nobody is the silent-no-op failure mode:
+    # a stage-name mismatch would leave the run looking healthy with the filter
+    # simply absent. Assert it bit, and that nothing it excludes survived.
+    gate = eligibility.TechnicalGate.from_settings(ctx.settings.screen)
+    if gate.active:
+        gated = int((uni["exclusion_code"].isin(
+            ("EX_TECHNICAL_STAGE", "EX_WEAK_RS", "EX_NO_TECHNICAL_READ"))).sum())
+        leaked = sorted(set(uni[uni["eligible_flag"] == 1]["technical_stage"])
+                        & set(gate.exclude_stages))
+        check("QC19", "Technical gate excluded companies and leaked none",
+              gated > 0 and not leaked,
+              f"{gated} excluded by the gate"
+              + (f"; LEAKED eligible in {leaked}" if leaked else ""))
+    else:
+        check("QC19", "Technical gate is off by configuration", True,
+              "no stages excluded; stage only nudges the score")
 
     # ---- persist -------------------------------------------------------------
     with db.transaction() as conn, conn.cursor() as cur:

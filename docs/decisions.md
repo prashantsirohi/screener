@@ -82,6 +82,52 @@ Two examples of holding that line:
   comparison. Widening to `numeric(24,10)` removed the whole class of knife-edge
   divergence rather than tolerancing the one instance.
 
+### D8 — The Weinstein stage gates eligibility, it does not just score
+
+Axis C began as 5 of 100 score points. Measured on the 2026-08-13 run, that made
+it almost inert: a `Stage 4 decline` name was 9.3% likely to be selected against
+18.3% for `Early Stage 2`, and `Mature Stage 1 base` — which the score *rewards*
+with 4 of 5 stage points — had the lowest selection rate of any stage at 4.7%,
+because the stage bonus was swamped by the 90 fundamental points.
+
+Comparing the six components between the selected 150 and the other 942 eligible
+made the scale of it plain:
+
+| component | max | candidates | rest | gap |
+|---|---:|---:|---:|---:|
+| archetype evidence | 25 | 19.3 | 12.8 | 6.5 |
+| catalyst visibility | 20 | 13.1 | 7.4 | 5.7 |
+| valuation plausibility | 15 | 9.4 | 5.0 | 4.4 |
+| financial quality | 20 | 17.6 | 13.2 | 4.3 |
+| governance | 10 | 9.0 | 7.7 | 1.3 |
+| **technical & liquidity** | **10** | **5.9** | **5.3** | **0.6** |
+
+The most heavily engineered part of the system — five years of exchange bars,
+30/40-week MAs, base detection, relative strength against sector and broad index
+— moved the ranking by 0.6 points out of 100.
+
+So `Stage 3 distribution` and `Stage 4 decline` now fail eligibility outright,
+recorded as `EX_TECHNICAL_STAGE`. Three design points:
+
+- **The gate runs last.** Gates short-circuit and the first failure is the
+  recorded code, so inserting it earlier would relabel exclusions whose meaning
+  had not changed. An illiquid Stage 4 company is still `EX_ILLIQUID`.
+- **It defaults off in `assess()`.** The four-argument form is byte-identical to
+  the frozen oracle, so the parity suite keeps testing the port rather than the
+  gate — the same discipline as the basis pin in D5.
+- **Stage names are validated at settings load.** A typo would match nothing,
+  and the run would look healthy with the filter simply absent. That is the same
+  shape as a QC check that cannot fail (F14), so `QC19` independently asserts the
+  gate excluded somebody and that no excluded stage leaked through.
+
+Effect: eligible 1,092 → 788, 119 of 150 candidates unchanged, score floor
+68.9 → 67.1. The floor barely moving is the reassuring part — the gate removed
+untradeable charts without sacrificing fundamental quality.
+
+The relative-strength floor is built but **off by default**. RS is a timing
+signal and Phase 1 feeds research measured in weeks; a basing name with mildly
+negative RS is often exactly what should be researched now.
+
 ---
 
 ## Findings
@@ -375,5 +421,9 @@ runs and run-to-run diffing do not work.
   independent share-count source is unavailable. Market-cap coverage reached
   2,085/2,086 through the retry queue instead, making it a redundancy rather than
   a dependency.
-- **The price-basis cutover is blocked** on price-return index series.
+- **35 demerger-affected securities** still fall back to Yahoo, because splitting
+  value across the resulting entities needs data the NSE feed does not carry.
+- **191 of 2,051 securities have no computable relative strength** (fewer than 30
+  overlapping weeks with the benchmark). Immaterial today because the RS floor is
+  off; turning it on would exclude them as `EX_WEAK_RS`.
 - **Phases 2 and 3 are not built.**

@@ -141,6 +141,20 @@ def run(ctx: RunContext) -> StageResult:
                   for r in features.compute_universe(st, as_of)}
     labels = fv._label_lookup(db)
 
+    gate = eligibility.TechnicalGate.from_settings(st.screen)
+    if gate.active:
+        log.info("technical gate active: excluding %s%s",
+                 sorted(gate.exclude_stages),
+                 f", 13w RS floor {gate.min_rs_13w_pct:+.1f}%"
+                 if gate.min_rs_13w_pct is not None else "")
+
+    # Persist the technical bundle. Until now these were computed and discarded,
+    # with only the stage label surviving into phase1_universe - so a gate
+    # decision had no evidence behind it and `runs diff` could show a stage flip
+    # without showing what moved.
+    n_tf = _write_technical_features(db, tech_by_id, ctx.run_id)
+    log.info("persisted %d technical feature rows", n_tf)
+
     events_by_symbol: dict[str, list[dict]] = {}
     for r in classify_events.event_flags(db, "v1"):
         events_by_symbol.setdefault(r["symbol"], []).append({
@@ -172,7 +186,7 @@ def run(ctx: RunContext) -> StageResult:
 
         liq = tech.get("liquidity_inr_cr")
         weeks = tech.get("weeks_history")
-        verdict = eligibility.assess(m, mc, weeks, liq)
+        verdict = eligibility.assess(m, mc, weeks, liq, tech=tech, gate=gate)
 
         evs = events_by_symbol.get(sym, [])
         cls = {"primary_archetype": None, "archetype_fit": 0.0,
@@ -248,6 +262,94 @@ def run(ctx: RunContext) -> StageResult:
     return StageResult(stage=STAGE, rows_in=len(universe), rows_out=len(rows),
                        detail={"evaluated": len(rows), "eligible": eligible,
                                "with_technicals": len(tech_by_id)})
+
+
+# dict key from weinstein.analyse() -> technical_feature column. The names drifted
+# apart because the table was written before the analyser and never wired up; the
+# mapping is explicit so a rename on either side fails loudly here rather than
+# silently persisting a column of nulls.
+_TECH_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("price_inr", "close"),
+    ("ma30w_inr", "ma30w"),
+    ("ma40w_inr", "ma40w"),
+    ("ma30w_slope_pct", "ma30w_slope_pct"),
+    ("ma40w_slope_pct", "ma40w_slope_pct"),
+    ("distance_from_ma30w_pct", "dist_from_ma30w_pct"),
+    ("high_52w", "high_52w"),
+    ("low_52w", "low_52w"),
+    ("distance_from_52w_high_pct", "dist_from_52w_high_pct"),
+    ("return_3m_pct", "return_13w_pct"),
+    ("return_6m_pct", "return_26w_pct"),
+    ("return_12m_pct", "return_52w_pct"),
+    ("rs_bm_13w_pct", "rs_bm_13w_pct"),
+    ("rs_bm_52w_pct", "rs_bm_52w_pct"),
+    ("rs_sector_13w_pct", "rs_sector_13w_pct"),
+    ("rs_sector_52w_pct", "rs_sector_52w_pct"),
+    ("vol_4w_avg", "vol_4w_avg"),
+    ("vol_20w_avg", "vol_20w_avg"),
+    ("volume_confirmation_value", "vol_ratio_4w_20w"),
+    ("weeks_above_ma30", "weeks_above_ma30"),
+    ("overhead_supply_pct", "overhead_supply_pct"),
+    ("liquidity_inr_cr", "liquidity_inr_cr"),
+    ("weeks_history", "weeks_history"),
+    ("benchmark_symbol", "benchmark_symbol"),
+    ("sector_benchmark", "sector_benchmark"),
+    ("adj_basis", "adj_basis"),
+    ("bar_source", "bar_source"),
+)
+
+_TECH_STAGING = {
+    "security_id": "bigint", "week_end_date": "date", "close": "numeric",
+    "ma30w": "numeric", "ma40w": "numeric", "ma30w_slope_pct": "numeric",
+    "ma40w_slope_pct": "numeric", "dist_from_ma30w_pct": "numeric",
+    "high_52w": "numeric", "low_52w": "numeric",
+    "dist_from_52w_high_pct": "numeric", "return_13w_pct": "numeric",
+    "return_26w_pct": "numeric", "return_52w_pct": "numeric",
+    "rs_bm_13w_pct": "numeric", "rs_bm_52w_pct": "numeric",
+    "rs_sector_13w_pct": "numeric", "rs_sector_52w_pct": "numeric",
+    "vol_4w_avg": "numeric", "vol_20w_avg": "numeric",
+    "vol_ratio_4w_20w": "numeric", "weeks_above_ma30": "integer",
+    "overhead_supply_pct": "numeric", "liquidity_inr_cr": "numeric",
+    "weeks_history": "integer", "benchmark_symbol": "text",
+    "sector_benchmark": "text", "adj_basis": "text", "bar_source": "text",
+    "run_id": "text",
+}
+
+
+def _write_technical_features(db, tech_by_id: dict, run_id: str) -> int:
+    """
+    Persist the Weinstein feature bundle keyed by (security_id, week_end_date).
+
+    Not run-scoped in the primary key: the features for a given week are a fact
+    about that week, not an artifact of the run that happened to compute them.
+    `run_id` records which run last wrote the row.
+    """
+    cols = ("security_id", "week_end_date") + tuple(c for _, c in _TECH_COLUMNS) \
+        + ("run_id",)
+    rows = []
+    for sid, t in tech_by_id.items():
+        wk = t.get("technical_data_date")
+        if wk is None:
+            continue
+        rows.append((sid, wk) + tuple(t.get(k) for k, _ in _TECH_COLUMNS)
+                    + (run_id,))
+    if not rows:
+        return 0
+
+    updates = ", ".join(f"{c} = EXCLUDED.{c}"
+                        for c in cols if c not in ("security_id", "week_end_date"))
+    with db.transaction() as conn, conn.cursor() as cur:
+        create_staging(cur, "p1_tf", _TECH_STAGING)
+        copy_rows(cur, "p1_tf", cols, rows)
+        cur.execute(f"""
+            INSERT INTO market.technical_feature ({", ".join(cols)})
+            SELECT DISTINCT ON (security_id, week_end_date) {", ".join(cols)}
+            FROM   staging.p1_tf
+            ON CONFLICT (security_id, week_end_date) DO UPDATE SET
+                {updates}, computed_at = now()
+        """)
+        drop_staging(cur, "p1_tf")
+    return len(rows)
 
 
 def _write(ctx: RunContext, rows, components, fits, derived) -> None:

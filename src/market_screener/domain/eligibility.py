@@ -11,7 +11,9 @@ Thresholds match the brief and the baseline exactly.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from .weinstein import STAGES
 
 MCAP_MIN = 1000.0          # INR crore
 MCAP_MAX = 100000.0
@@ -37,7 +39,18 @@ EXCLUSION_CODES = {
         "does not present an identifiable return mechanism at Phase 1 depth."),
     "EX_DATA_QUALITY": (
         "Core screening metrics missing - classification would not be reliable."),
+    "EX_TECHNICAL_STAGE": (
+        "Weinstein stage is one the technical gate excludes - the business may "
+        "be sound but the chart is not in an ownable stage."),
+    "EX_WEAK_RS": (
+        "13-week relative strength against the broad benchmark is below the "
+        "configured floor."),
+    "EX_NO_TECHNICAL_READ": (
+        "Technical stage could not be determined, so the technical gate cannot "
+        "be satisfied."),
 }
+
+INDETERMINATE = "Indeterminate-insufficient adjusted history"
 
 
 @dataclass(frozen=True)
@@ -47,13 +60,83 @@ class Eligibility:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class TechnicalGate:
+    """
+    Turns the Weinstein stage from a scoring nudge into a hard gate.
+
+    Stage names are validated against `weinstein.STAGES` on construction. A typo
+    would otherwise match nothing and disable the gate silently, which is the
+    same failure mode as a QC check that cannot fail - the run looks healthy and
+    the filter is simply absent.
+    """
+    exclude_stages: frozenset[str] = field(default_factory=frozenset)
+    min_rs_13w_pct: float | None = None
+    exclude_indeterminate: bool = True
+
+    def __post_init__(self) -> None:
+        unknown = sorted(set(self.exclude_stages) - set(STAGES))
+        if unknown:
+            raise ValueError(
+                f"unknown Weinstein stage(s) in the technical gate: {unknown}. "
+                f"Valid stages are: {STAGES}")
+
+    @property
+    def active(self) -> bool:
+        return bool(self.exclude_stages) or self.min_rs_13w_pct is not None
+
+    @classmethod
+    def from_settings(cls, screen) -> "TechnicalGate":
+        return cls(
+            exclude_stages=frozenset(screen.technical_gate_exclude_stages),
+            min_rs_13w_pct=screen.technical_gate_min_rs_13w,
+            exclude_indeterminate=screen.technical_gate_excludes_indeterminate)
+
+    def assess(self, tech: dict) -> Eligibility:
+        """Apply the gate to one security's technical bundle."""
+        if not self.active:
+            return Eligibility(True)
+
+        stage = tech.get("technical_stage")
+        if stage is None or stage == INDETERMINATE:
+            if self.exclude_indeterminate:
+                return Eligibility(False, "EX_NO_TECHNICAL_READ",
+                                   EXCLUSION_CODES["EX_NO_TECHNICAL_READ"])
+            return Eligibility(True)
+
+        if stage in self.exclude_stages:
+            return Eligibility(False, "EX_TECHNICAL_STAGE",
+                               f"technical stage is {stage}")
+
+        if self.min_rs_13w_pct is not None:
+            rs = tech.get("rs_bm_13w_pct")
+            if rs is None:
+                return Eligibility(False, "EX_WEAK_RS",
+                                   "13-week relative strength unavailable")
+            if rs < self.min_rs_13w_pct:
+                return Eligibility(
+                    False, "EX_WEAK_RS",
+                    f"13w RS {rs:+.1f}% < floor {self.min_rs_13w_pct:+.1f}%")
+
+        return Eligibility(True)
+
+
 def assess(metrics: dict, market_cap: float | None, weeks_history: int | None,
-           liquidity_inr_cr: float | None) -> Eligibility:
+           liquidity_inr_cr: float | None, *,
+           tech: dict | None = None,
+           gate: TechnicalGate | None = None) -> Eligibility:
     """
     Apply the gates in order. Returns the first failure, or eligible.
 
     The archetype gate is NOT applied here: it needs the classification result,
     so the caller applies EX_NO_ARCHETYPE after classify() returns nothing.
+
+    The technical gate is applied LAST, and is off unless a `gate` is passed.
+    Both matter. Gates short-circuit, so the first failure is the recorded code -
+    inserting the technical gate earlier would relabel exclusions that have not
+    changed meaning. And defaulting it off keeps this function's four-argument
+    form identical to the frozen oracle, so the parity suite still compares the
+    port rather than the gate.
     """
     if metrics.get("data_error") or not metrics.get("company"):
         return Eligibility(False, "EX_NO_FUNDAMENTALS",
@@ -76,6 +159,8 @@ def assess(metrics: dict, market_cap: float | None, weeks_history: int | None,
         return Eligibility(False, "EX_ILLIQUID",
                            (f"median daily traded value INR {liquidity_inr_cr} cr"
                             if liquidity_inr_cr is not None else "no volume data"))
+    if gate is not None and gate.active:
+        return gate.assess(tech or {})
     return Eligibility(True)
 
 

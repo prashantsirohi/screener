@@ -7,6 +7,7 @@ code here so it is reviewable in diffs.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -111,6 +112,20 @@ class ScreenSettings:
     candidate_target_low: int = 100
     candidate_target_high: int = 150
     min_select_score: float = 45.0
+    # Technical gate. Weinstein's own doctrine is that Stage 3 is topping and
+    # Stage 4 is declining, and neither is ownable however good the business is.
+    # Before this existed the stage was worth at most 5 of 100 score points and
+    # barely moved selection: a Stage 4 name was ~9% likely to be picked against
+    # ~18% for Early Stage 2. Empty tuple disables the gate entirely.
+    technical_gate_exclude_stages: tuple[str, ...] = (
+        "Stage 3 distribution", "Stage 4 decline")
+    # Optional and off by default. Relative strength is a timing signal, and
+    # Phase 1 feeds research that takes weeks - a basing name with mildly
+    # negative RS is often exactly what you want to start work on now.
+    technical_gate_min_rs_13w: float | None = None
+    # An indeterminate stage means the technicals could not be computed. Under an
+    # active gate that is a failure to confirm, not a pass.
+    technical_gate_excludes_indeterminate: bool = True
     # screener.in refresh cadence; the staleness gate is what keeps steady-state
     # load at ~25 pages/day instead of 2,086.
     fundamentals_max_age_days: int = 45
@@ -154,6 +169,48 @@ class Settings:
         }
 
 
+def _screen_settings() -> ScreenSettings:
+    """
+    Screening thresholds, with the technical gate overridable from the env.
+
+    `SCREENER_TECHNICAL_GATE` accepts `off` to disable it, `default` (or unset)
+    for the shipped Stage 3/4 exclusion, or an explicit `|`-separated list of
+    Weinstein stage names. `SCREENER_TECHNICAL_GATE_MIN_RS` adds a 13-week
+    relative-strength floor in percent.
+
+    Stage names are validated here rather than only at gate construction, so a
+    typo in `.env` is caught by `screener doctor` instead of silently screening
+    without the filter the operator thought they had configured.
+    """
+    from .domain.weinstein import STAGES
+
+    defaults = ScreenSettings()
+    raw = (_env("SCREENER_TECHNICAL_GATE") or "").strip()
+
+    if not raw or raw.lower() == "default":
+        stages = defaults.technical_gate_exclude_stages
+    elif raw.lower() in ("off", "none", "disabled", "0", "false"):
+        stages = ()
+    else:
+        stages = tuple(s.strip() for s in raw.split("|") if s.strip())
+        unknown = sorted(set(stages) - set(STAGES))
+        if unknown:
+            raise ValueError(
+                f"SCREENER_TECHNICAL_GATE names unknown Weinstein stage(s): "
+                f"{unknown}. Valid stages are: {STAGES}")
+
+    rs_raw = (_env("SCREENER_TECHNICAL_GATE_MIN_RS") or "").strip()
+    try:
+        min_rs = float(rs_raw) if rs_raw else defaults.technical_gate_min_rs_13w
+    except ValueError:
+        raise ValueError(
+            f"SCREENER_TECHNICAL_GATE_MIN_RS must be a number in percent, "
+            f"got {rs_raw!r}") from None
+
+    return dataclasses.replace(defaults, technical_gate_exclude_stages=stages,
+                               technical_gate_min_rs_13w=min_rs)
+
+
 def load_settings(domain: DataDomain = "operational",
                   project_root: Path | str | None = None) -> Settings:
     root = canonicalize_project_root(project_root)
@@ -168,6 +225,7 @@ def load_settings(domain: DataDomain = "operational",
         basis = "split_bonus"
 
     return Settings(
+        screen=_screen_settings(),
         project_root=root,
         domain=domain,
         paths=get_domain_paths(domain, root),
@@ -179,7 +237,6 @@ def load_settings(domain: DataDomain = "operational",
             password=_env("SCREENER_PG_PASSWORD"),
         ),
         http=HttpSettings(),
-        screen=ScreenSettings(),
         analytics_mode=mode,  # type: ignore[arg-type]
         price_basis=basis,    # type: ignore[arg-type]
         screener_session_cookie=_env("SCREENER_SESSION_COOKIE"),

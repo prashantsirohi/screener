@@ -30,21 +30,25 @@ The screen classifies each company on three independent axes:
 | **B** | Secondary tags from a controlled vocabulary (peak-cycle risk, capex commissioning, governance risk, …) |
 | **C** | A Weinstein technical stage, computed arithmetically from adjusted weekly bars — never by judgement |
 
+Axis C is a **gate**, not just a label: `Stage 3 distribution` and `Stage 4
+decline` are excluded from eligibility, on the view that neither is ownable
+however good the business is. Configurable via `SCREENER_TECHNICAL_GATE`.
+
 ## Current state
 
-Phase 1 is complete and passes **212 tests**. Phases 2 (forensic validation and
+Phase 1 is complete and passes **290 tests**. Phases 2 (forensic validation and
 valuation) and 3 (technical confirmation and portfolio construction) are not
 built; the schema and point-in-time design do not preclude them.
 
 A representative run:
 
 ```
-run p1-2026-08-11-ea35f982 -> complete
-  evaluated  2086      eligible  1106      selected  150
-  s80_phase1_screen   complete   with_technicals=1954
-  s85_phase1_outputs  complete   source_records=4979
+run p1-2026-08-13-0470b420 -> complete
+  evaluated  2086      eligible  788      selected  150
+  s80_phase1_screen   complete   with_technicals=2051
+  s85_phase1_outputs  complete   source_records=4980
   s90_summary         complete   files=5
-  s95_qc              complete   passed=18, total=18
+  s95_qc              complete   passed=19, total=19
 ```
 
 What is in the store:
@@ -55,6 +59,7 @@ What is in the store:
 | Daily price bars (1,243 sessions since 2021-08, with turnover) | 2,426,758 |
 | Weekly bars (both sources retained) | 962,748 |
 | Point-in-time fundamental facts | 1,151,022 |
+| Weinstein technical feature rows | 2,051 |
 | Corporate announcements | 227,498 |
 | Corporate actions | 713 |
 | Primary documents discovered | 246 |

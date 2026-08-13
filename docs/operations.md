@@ -26,7 +26,9 @@ Environment variables, or a `.env` alongside `pyproject.toml`.
 | `SCREENER_PG_HOST` / `PORT` / `DATABASE` / `USER` | `127.0.0.1` / `5432` / `market_screener` / `postgres` | |
 | `SCREENER_PG_PASSWORD` | unset | Omitted from the conninfo when unset, which suits `trust` auth on loopback |
 | `SCREENER_ANALYTICS_MODE` | `attach` | `attach` or `parquet` |
-| `SCREENER_PRICE_BASIS` | `yahoo_adjclose` | `yahoo_adjclose` or `split_bonus`. See the cutover note below |
+| `SCREENER_PRICE_BASIS` | `split_bonus` | `yahoo_adjclose` or `split_bonus`. See the basis note below |
+| `SCREENER_TECHNICAL_GATE` | `default` | `off`, `default`, or a `\|`-separated list of Weinstein stage names to exclude |
+| `SCREENER_TECHNICAL_GATE_MIN_RS` | unset | Optional 13-week relative-strength floor, in percent |
 | `SCREENER_SESSION_COOKIE` | unset | Optional screener.in session cookie. Do not automate login; check their terms |
 | `DATA_ROOT` / `REPORTS_ROOT` / `LOGS_ROOT` | `./data`, `./reports`, `./logs` | Move artifacts off the project tree |
 | `SCREENER_LOG_LEVEL` | `INFO` | |
@@ -179,6 +181,56 @@ resolve by hand.
 
 **Stranded retry claims.** A crash mid-claim leaves rows `in_flight`; the lease
 timeout returns them to `pending` on the next drain.
+
+## The technical gate
+
+By default the screen **excludes `Stage 3 distribution` and `Stage 4 decline`
+from eligibility**. Those are the two stages Weinstein holds are not ownable
+however good the underlying business is, and a company failing the gate is
+recorded as `EX_TECHNICAL_STAGE`.
+
+Before the gate existed the stage was worth at most 5 of 100 score points and
+barely influenced anything. Measured on the 2026-08-13 run, a Stage 4 name was
+9.3% likely to be selected against 18.3% for Early Stage 2 — a nudge, not a
+filter. The gate is what makes the technical layer actually decide something.
+
+Effect on that run:
+
+| | ungated | gated |
+|---|---:|---:|
+| Eligible | 1,092 | **788** |
+| Excluded by the gate | — | 304 |
+| Candidates unchanged | — | **119 of 150** |
+| Score floor at 150 | 68.9 | 67.1 |
+
+The floor barely moved, which is the useful part: the excluded names were not
+concentrated at the top, so the gate removes untradeable charts without
+sacrificing much fundamental quality.
+
+### Tuning it
+
+```bash
+SCREENER_TECHNICAL_GATE=off screener screen --force            # disable entirely
+SCREENER_TECHNICAL_GATE='Stage 4 decline' screener screen      # allow Stage 3
+SCREENER_TECHNICAL_GATE_MIN_RS=0 screener screen               # add an RS floor
+```
+
+Stage names must match `weinstein.STAGES` exactly and are validated at settings
+load, so a typo fails `screener doctor` rather than silently screening with no
+filter. `QC19` independently asserts the gate excluded somebody and that no
+excluded stage leaked into the eligible set — a gate that quietly matches nothing
+is the failure mode worth engineering against, not a wrong verdict.
+
+An **optional** relative-strength floor (`min_rs_13w`) is off by default. RS is a
+timing signal and Phase 1 feeds research that takes weeks, so a basing name with
+mildly negative RS is often exactly what you want to start work on now. Note that
+191 of 2,051 securities have no computable RS (fewer than 30 overlapping weeks
+with the benchmark); under a configured floor those fail as `EX_WEAK_RS`, because
+absent evidence is not evidence of strength.
+
+The gate is part of `config_hash`, so gated and ungated runs are distinguishable
+and `runs diff` can attribute the delta. The parity suite pins to gate-off for
+the same reason it pins to `yahoo_adjclose`.
 
 ## The price basis
 

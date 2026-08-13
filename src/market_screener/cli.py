@@ -37,6 +37,13 @@ def _cmd_doctor(args) -> int:
     print(f"  price basis       {st.price_basis}"
           + ("  (price return, exchange-sourced)" if st.price_basis == "split_bonus"
              else "  (total return, aggregator-sourced)"))
+    _gate = st.screen.technical_gate_exclude_stages
+    _rs = st.screen.technical_gate_min_rs_13w
+    if _gate or _rs is not None:
+        print(f"  technical gate    excludes {', '.join(_gate) or 'no stages'}"
+              + (f"; 13w RS floor {_rs:+.1f}%" if _rs is not None else ""))
+    else:
+        print("  technical gate    off  (stage only nudges the score)")
     print(f"  config hash       {st.config_hash()}")
 
     db = Database(st.pg)

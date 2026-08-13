@@ -74,29 +74,40 @@ def db():
 
 
 BASELINE_BASIS = "yahoo_adjclose"
+# The baseline also predates the technical gate, which excludes whole Weinstein
+# stages from eligibility. A gated run cannot be row-compared against it.
+BASELINE_GATE_STAGES: tuple[str, ...] = ()
 
 
-@pytest.fixture(scope="module")
-def latest_run(db):
+def baseline_config_hash():
     """
-    The most recent run on the basis the FROZEN BASELINE was built on.
+    The config hash of a run this suite can legitimately compare against.
 
-    Deliberately not the configured default. The baseline predates the rewrite
-    and was produced on yahoo_adjclose; the production default is now
-    split_bonus. This suite exists to prove the PORT changed no answers, so it
-    must compare like with like - measuring the basis change here would conflate
-    two entirely different questions, and the basis comparison has its own
-    treatment in docs/decisions.md (F20, F23).
+    Deliberately not the configured default, on two axes. The baseline predates
+    the rewrite and was produced on yahoo_adjclose with no technical gate; the
+    production defaults are now split_bonus and a Stage 3/4 exclusion. This suite
+    exists to prove the PORT changed no answers, so it must compare like with
+    like - folding either behaviour change in here would conflate separate
+    questions, each of which has its own treatment in docs/decisions.md.
 
-    config_hash covers price_basis, so building the baseline-basis variant and
-    matching on its hash selects a genuinely comparable run.
+    config_hash covers both, so reconstructing the baseline variant and matching
+    on its hash selects a genuinely comparable run.
     """
     import dataclasses
 
     from market_screener.config import load_settings
 
-    want = dataclasses.replace(load_settings(),
-                               price_basis=BASELINE_BASIS).config_hash()
+    st = load_settings()
+    screen = dataclasses.replace(
+        st.screen, technical_gate_exclude_stages=BASELINE_GATE_STAGES,
+        technical_gate_min_rs_13w=None)
+    return dataclasses.replace(
+        st, price_basis=BASELINE_BASIS, screen=screen).config_hash()
+
+
+@pytest.fixture(scope="module")
+def latest_run(db):
+    want = baseline_config_hash()
     rid = db.fetch_value("""
         SELECT run_id FROM market.screen_run
         WHERE  phase = 1 AND status = 'complete' AND config_hash = %s
@@ -104,9 +115,10 @@ def latest_run(db):
     """, (want,))
     if not rid:
         pytest.skip(
-            f"no completed Phase 1 run on the {BASELINE_BASIS} basis to compare "
-            f"against the frozen baseline; produce one with "
-            f"SCREENER_PRICE_BASIS={BASELINE_BASIS} screener screen --force")
+            f"no completed Phase 1 run matching the frozen baseline's config "
+            f"(basis={BASELINE_BASIS}, technical gate off); produce one with:\n"
+            f"  SCREENER_PRICE_BASIS={BASELINE_BASIS} "
+            f"SCREENER_TECHNICAL_GATE=off screener screen --force")
     return rid
 
 
