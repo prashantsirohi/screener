@@ -123,15 +123,40 @@ def test_unconfirmed_actions_are_not_applied(db):
         "SELECT count(*) AS c FROM market.corporate_action WHERE confidence='unconfirmed'")
     if n_unconfirmed == 0:
         pytest.skip("no unconfirmed actions in this run")
-    leaked = db.fetch_value("""
-        SELECT count(*) AS c
-        FROM   market.price_daily_adj a
-        JOIN   market.corporate_action ca ON ca.security_id = a.security_id
-        WHERE  ca.confidence = 'unconfirmed'
-          AND  a.trade_date < ca.ex_date
-          AND  a.cum_adj_factor = ca.adjustment_factor
+
+    # Test the actual invariant - that an unconfirmed action creates no factor
+    # discontinuity at its ex-date - rather than looking for a factor that
+    # merely EQUALS its ratio. With 700+ actions in the store, a security whose
+    # confirmed 1:2 split gives it a 0.5 factor will coincidentally match any
+    # unconfirmed 0.5 action, and the old form reported 1,489 false positives.
+    leaked = db.fetch_all("""
+        WITH solo AS (
+            -- unconfirmed actions with no trusted action nearby to explain a step
+            SELECT ca.security_id, ca.ex_date, ca.adjustment_factor
+            FROM   market.corporate_action ca
+            WHERE  ca.confidence = 'unconfirmed'
+              AND  NOT EXISTS (
+                    SELECT 1 FROM market.corporate_action o
+                    WHERE  o.security_id = ca.security_id
+                      AND  o.confidence <> 'unconfirmed'
+                      AND  o.ex_date BETWEEN ca.ex_date - 7 AND ca.ex_date + 7)
+        )
+        SELECT s.security_id, s.ex_date,
+               before.cum_adj_factor AS f_before, on_day.cum_adj_factor AS f_on
+        FROM   solo s
+        JOIN LATERAL (
+            SELECT cum_adj_factor FROM market.price_daily_adj
+            WHERE  security_id = s.security_id AND trade_date < s.ex_date
+            ORDER  BY trade_date DESC LIMIT 1) before ON true
+        JOIN LATERAL (
+            SELECT cum_adj_factor FROM market.price_daily_adj
+            WHERE  security_id = s.security_id AND trade_date >= s.ex_date
+            ORDER  BY trade_date LIMIT 1) on_day ON true
+        WHERE  abs(before.cum_adj_factor - on_day.cum_adj_factor) > 1e-9
+        LIMIT  5
     """)
-    assert leaked == 0
+    assert not leaked, (
+        f"an unconfirmed action changed the adjustment factor: {leaked}")
 
 
 # ---------------- adjusted series ----------------
@@ -199,8 +224,12 @@ def test_recent_weeks_agree_between_the_two_sources(db):
                   AND y.week_end_date = w.week_end_date
             WHERE  w.source = 'nse_bhavcopy' AND y.source = 'yahoo_weekly'
               AND  y.close > 0
+              -- is_complete matters: without it this picks the current partial
+              -- week, where the two sources hold different numbers of sessions
+              -- and are not comparable at all.
+              AND  w.is_complete AND y.is_complete
               AND  w.week_end_date = (SELECT max(week_end_date) FROM market.weekly_bar
-                                      WHERE source = 'nse_bhavcopy')
+                                      WHERE source = 'nse_bhavcopy' AND is_complete)
         )
         SELECT count(*) AS n, sum(CASE WHEN diff < 0.001 THEN 1 ELSE 0 END) AS close_enough
         FROM paired

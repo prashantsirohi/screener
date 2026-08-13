@@ -141,16 +141,23 @@ supplies price-return series for all twelve benchmark indices, which was the
 blocker — but the evidence does not yet justify it. See
 [decisions.md F20](decisions.md) for the measurement.
 
-In short: the stage flips are not explained by the basis change (the flipped
-names have a *median dividend yield of zero*), and bhavcopy history runs 157
-weeks against Yahoo's 261 — uncomfortably tight against the 130-week base
-lookback. Two things should be true before switching:
+Both bases now run to five years, so history length is no longer the issue. The
+remaining blocker is reconciliation: **~306 securities carry corporate actions we
+have not found**, and on the price-return basis there is no Yahoo fallback to
+demote them to, so they are excluded outright. That costs 162 companies from the
+eligible set — 1,106 down to 945.
 
-1. **Bhavcopy backfilled to five years**, so the lookback is not the binding
-   constraint.
-2. **The 344 non-reconciling securities resolved.** On the Yahoo basis they fall
-   back; on the price-return basis there is no fallback, so they are excluded
-   outright rather than served a series already known to be wrong.
+The precondition is therefore to resolve the non-reconciling securities, not to
+collect more history. Progress is visible in:
+
+```bash
+screener derive --what reconcile     # verdict counts
+```
+
+Watch `missed_action` and `disagree`. Each one is a corporate action the
+adjustment is missing; `derive --what actions-divergence` recovers some
+automatically by using Yahoo as a second opinion, but the residual needs the
+NSE feed to improve or manual investigation.
 
 To evaluate a cutover:
 

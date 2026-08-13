@@ -219,36 +219,41 @@ basis. NSE's `ind_close_all_<DDMMYYYY>.csv` turns out to publish OHLC for ~163
 indices, which is price return by construction — so all twelve benchmarks now
 have `split_bonus` series and the cutover is mechanically available.
 
-Measuring it, though, argues against adopting it yet. Running the same screen on
-both bases:
+Measured twice. The first comparison, on three years of bhavcopy, showed two
+problems: the stage flips did not track dividend yield (flipped names had a
+*median dividend yield of 0.000* against 0.180 for unflipped), and the history
+was short — 157 weeks against a base-detection lookback of up to 130.
+
+Backfilling bhavcopy and the index closes to five years removed the second
+objection entirely and sharpened the first:
 
 | | yahoo_adjclose | split_bonus |
 |---|---|---|
-| Securities with ≥40 weeks | 1,930 | 2,099 |
-| Longest history | 261 weeks | 157 weeks |
-| Eligible | 1,106 | 1,097 |
-| Candidates unchanged | — | 146 of 150 |
-| Technical stage flips | — | 151 |
+| Longest history | 261 weeks | **261 weeks** |
+| Securities with ≥40 weeks of bars | 1,930 | **2,135** |
+| Securities that actually get a stage | **1,954** | 1,665 |
+| Eligible | **1,106** | 945 |
+| Candidates unchanged | — | 127 of 150 |
 
-Two problems.
+The raw data is now better on the price-return basis — longer coverage, more
+securities. The *screen* is worse, and the reason is F21's guard: 425 securities
+whose bhavcopy history fails reconciliation are excluded outright, because on
+this basis there is no Yahoo fallback to demote to. They drop to
+`EX_NO_PRICE_HISTORY`, taking 162 companies out of the eligible set — 3M India,
+Abbott India and Chennai Petroleum among them.
 
-**The flips are not explained by the basis change.** If the difference were the
-dividend treatment, flipped names would skew toward dividend payers. They do not:
-the flipped set has a *median dividend yield of 0.000* against 0.180 for the
-unflipped. Something other than the basis is moving those stages, and the plan's
-exit condition — every flip explained — is therefore unmet.
+So the binding constraint was never history length. It is that ~306 securities
+still carry corporate actions we have not found, and the price-return basis has
+no way to route around them. Adopting the cutover today would trade 15% of the
+eligible universe for a more correct basis on the remainder.
 
-**The history is short.** 157 weeks against a base-detection lookback of up to
-130 leaves 27 weeks of margin; Yahoo's 261 is comfortable. Weinstein analysis
-wants a long window and this one is tight.
+The default stays `yahoo_adjclose`. The real precondition is resolving the
+non-reconciling securities, not more history. Recorded in
+[operations.md](operations.md).
 
-Adopting the change now would trade a well-understood series for a shorter one
-with unexplained differences. The default stays `yahoo_adjclose`. The
-preconditions are recorded in [operations.md](operations.md): backfill bhavcopy
-to five years, and resolve the 344 non-reconciling securities.
-
-Worth noting what the work did buy: the blocker is gone, bhavcopy covers more
-securities than Yahoo, and the distrust guard below exists because of it.
+What the work did buy: the blocker is gone, both bases now run to five years,
+bhavcopy covers more securities than Yahoo, and the guard below exists because
+of it.
 
 ### F21 — On the price-return basis, distrusted series had no fallback
 

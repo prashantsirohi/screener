@@ -38,6 +38,8 @@ ATTRIBUTABLE_COLS = {
     "primary_source_ids", "secondary_source_ids",   # provenance-derived now
     "technical_data_date",                          # ISO-Friday + complete weeks
     "price_date", "market_cap_date",
+    # A later run has a later as_of; the baseline is dated 2026-08-10.
+    "screening_date",
     # The company name now comes from NSE's EQUITY_L entry rather than the
     # scraped page heading - "20 Microns Limited" instead of "20 Microns Ltd".
     # The exchange's own name is the authoritative one, and the label feeds no
@@ -73,13 +75,23 @@ def db():
 
 @pytest.fixture(scope="module")
 def latest_run(db):
+    """
+    The most recent run on the CONFIGURED price basis.
+
+    An exploratory run on the other basis must not be picked up as the thing to
+    compare against the baseline - it would measure the basis change rather than
+    the port. config_hash includes price_basis, so matching on it selects runs
+    that are actually comparable.
+    """
+    from market_screener.config import load_settings
+    want = load_settings().config_hash()
     rid = db.fetch_value("""
         SELECT run_id FROM market.screen_run
-        WHERE  phase = 1 AND status = 'complete'
+        WHERE  phase = 1 AND status = 'complete' AND config_hash = %s
         ORDER  BY started_at DESC LIMIT 1
-    """)
+    """, (want,))
     if not rid:
-        pytest.skip("no completed Phase 1 run; run `screener screen`")
+        pytest.skip("no completed Phase 1 run on the configured basis")
     return rid
 
 

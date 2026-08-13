@@ -52,11 +52,12 @@ What is in the store:
 | | |
 |---|---|
 | Active NSE series-EQ securities | 2,086 |
-| Daily price bars (746 sessions, with turnover) | 1,533,863 |
-| Weekly bars (both sources retained) | 774,730 |
+| Daily price bars (1,243 sessions since 2021-08, with turnover) | 2,426,758 |
+| Weekly bars (both sources retained) | 962,748 |
 | Point-in-time fundamental facts | 1,151,022 |
-| Corporate announcements | 226,372 |
-| Corporate actions | 463 |
+| Corporate announcements | 227,498 |
+| Corporate actions | 713 |
+| Primary documents discovered | 246 |
 
 ## Quickstart
 
@@ -75,7 +76,9 @@ screener migrate              # creates the database and applies the schema
 Then populate and run:
 
 ```bash
-screener sync --source prices --backfill 1100   # ~3 years of bhavcopy
+screener sync --source prices  --backfill 1830  # ~5 years of bhavcopy
+screener sync --source indices --backfill 1830  # price-return benchmark series
+screener sync --source announcements --backfill 450
 screener derive --what all                      # corporate actions, adjusted, weekly
 screener classify-events                        # taxonomy over announcements
 screener screen                                 # Phase 1 -> reports/runs/<run_id>/output/
