@@ -128,6 +128,40 @@ The relative-strength floor is built but **off by default**. RS is a timing
 signal and Phase 1 feeds research measured in weeks; a basing name with mildly
 negative RS is often exactly what should be researched now.
 
+### D9 — The candidate count is a signal, not a constant
+
+Selection was "top 150 by score", with a nominal `min_select_score` of 45 that
+never bound — 1,092 names cleared it and the real cut landed at 68.9. The screen
+therefore produced exactly 150 candidates every week regardless of what the
+market offered, and the count told you nothing.
+
+It is now **everything at or above a hard floor, capped at 150**. The default
+floor is 60, anchored to a structural break in the score distribution rather than
+to a target count: from 75 down to 60 the six components degrade smoothly, and
+below 60 they fall away together — mean valuation plausibility 6.8 → 3.8,
+archetype evidence 15.1 → 11.6. Above 60 is a weak thesis; below it is the
+absence of one.
+
+Each run records which constraint bound. `bound_by=target` means the market
+offered more than can be researched; `bound_by=floor` means it did not.
+
+At 60 the floor does not bind today — 307 names clear it, so the run still
+selects 150. That is the correct behaviour for a bar anchored to quality rather
+than to a count, and the sensitivity table in
+[operations.md](operations.md) gives the values that do bind.
+
+Two things this surfaced:
+
+- **`candidate_target_high` and `min_select_score` were dead config.** `s85`
+  hardcoded them as module constants while `ScreenSettings` carried unused
+  copies — which still fed `config_hash`. Changing either produced a different
+  hash and an identical candidate set: the most misleading possible combination,
+  since the run table would record two distinguishable runs that were not.
+- **`QC17` asserted `100 <= candidates <= 150`.** It would have failed the first
+  time a floor legitimately bound. It now accepts a short list only when the
+  count equals the number above the floor, so a thin market passes and a
+  selection bug still fails.
+
 ---
 
 ## Findings

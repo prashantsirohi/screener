@@ -74,35 +74,70 @@ def db():
 
 
 BASELINE_BASIS = "yahoo_adjclose"
-# The baseline also predates the technical gate, which excludes whole Weinstein
-# stages from eligibility. A gated run cannot be row-compared against it.
-BASELINE_GATE_STAGES: tuple[str, ...] = ()
+
+# The screening config the FROZEN BASELINE was produced under. Every entry is a
+# production default that has since moved; each is pinned here so this suite
+# keeps comparing like with like.
+#
+# This suite exists to prove the PORT changed no answers. Letting it follow a
+# default that has deliberately changed would conflate that with the behaviour
+# change, and each of these has its own treatment in docs/decisions.md.
+BASELINE_SCREEN = {
+    # D8: the gate excludes whole Weinstein stages from eligibility, so a gated
+    # run has entire rows the baseline screened. Not row-comparable.
+    "technical_gate_exclude_stages": (),
+    "technical_gate_min_rs_13w": None,
+    # The floor was raised 45 -> 60. It changes no compared row - it selects
+    # within phase1_universe rather than producing it - but it is in
+    # config_hash, so it must be pinned for the hash to resolve.
+    "min_select_score": 45.0,
+}
 
 
 def baseline_config_hash():
     """
     The config hash of a run this suite can legitimately compare against.
 
-    Deliberately not the configured default, on two axes. The baseline predates
-    the rewrite and was produced on yahoo_adjclose with no technical gate; the
-    production defaults are now split_bonus and a Stage 3/4 exclusion. This suite
-    exists to prove the PORT changed no answers, so it must compare like with
-    like - folding either behaviour change in here would conflate separate
-    questions, each of which has its own treatment in docs/decisions.md.
+    config_hash covers the basis and everything in ScreenSettings, so
+    reconstructing the baseline variant and matching on its hash selects a
+    genuinely comparable run.
 
-    config_hash covers both, so reconstructing the baseline variant and matching
-    on its hash selects a genuinely comparable run.
+    Note the failure mode this guards: adding ANY field to ScreenSettings
+    re-hashes every historical run, and an unpinned addition leaves the fixture
+    matching nothing. The suite would then skip - silently retiring the
+    acceptance gate at exactly the moment screening behaviour changed. The
+    skip message below is the visible signal; test_baseline_run_exists is the
+    loud one.
     """
     import dataclasses
 
     from market_screener.config import load_settings
 
     st = load_settings()
-    screen = dataclasses.replace(
-        st.screen, technical_gate_exclude_stages=BASELINE_GATE_STAGES,
-        technical_gate_min_rs_13w=None)
     return dataclasses.replace(
-        st, price_basis=BASELINE_BASIS, screen=screen).config_hash()
+        st, price_basis=BASELINE_BASIS,
+        screen=dataclasses.replace(st.screen, **BASELINE_SCREEN)).config_hash()
+
+
+def test_baseline_run_exists(db):
+    """
+    Fail loudly, rather than skipping, when nothing is comparable.
+
+    Every other test here depends on a fixture that SKIPS when the baseline-config
+    run is absent, and a suite of skips reads as green. That has now nearly
+    happened twice - adding the technical gate and then the score floor each
+    re-hashed every historical run. This test is the alarm.
+    """
+    want = baseline_config_hash()
+    n = db.fetch_value("""
+        SELECT count(*) AS c FROM market.screen_run
+        WHERE  phase = 1 AND status = 'complete' AND config_hash = %s
+    """, (want,))
+    assert n, (
+        f"no completed Phase 1 run with the frozen baseline's config "
+        f"(hash {want}: basis={BASELINE_BASIS}, {BASELINE_SCREEN}). The row "
+        f"parity tests cannot run. If a ScreenSettings field was just added, "
+        f"pin it in BASELINE_SCREEN; otherwise regenerate the run.")
 
 
 @pytest.fixture(scope="module")

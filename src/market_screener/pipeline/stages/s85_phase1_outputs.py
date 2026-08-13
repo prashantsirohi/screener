@@ -40,8 +40,12 @@ SCREEN_COLS = [
 CANDIDATE_EXTRA = ["phase2_priority", "phase2_questions",
                    "required_primary_documents", "known_data_gaps"]
 
+# Fallbacks only. The live values come from ctx.settings.screen - these constants
+# used to be the real ones, which quietly made candidate_target_high and
+# min_select_score dead config: both were folded into config_hash, so changing
+# them produced a different hash and an identical candidate set.
 TARGET_LO, TARGET_HI = 100, 150
-MIN_SELECT_SCORE = 45.0
+MIN_SELECT_SCORE = 60.0
 
 ARCHETYPE_QUESTIONS = {
     "Quality compounder": [
@@ -182,15 +186,28 @@ def run(ctx: RunContext) -> StageResult:
     el["preliminary_priority_score"] = pd.to_numeric(
         el["preliminary_priority_score"], errors="coerce")
     el = el.sort_values("preliminary_priority_score", ascending=False)
-    pool = el[el["preliminary_priority_score"] >= MIN_SELECT_SCORE]
 
-    if len(pool) > TARGET_HI:
-        cand = pool.head(TARGET_HI).copy()
-        note = (f"top {TARGET_HI} by preliminary priority score "
-                f"(score floor {cand['preliminary_priority_score'].min():.1f})")
+    floor = ctx.settings.screen.min_select_score
+    target_hi = ctx.settings.screen.candidate_target_high
+    pool = el[el["preliminary_priority_score"] >= floor]
+
+    # Which constraint bound is the informative part. A run capped at the target
+    # says the market offered more than we can research; a run stopped by the
+    # floor says it did not, and the count is then a signal rather than a
+    # constant. Both are recorded so the summary can say which happened.
+    if len(pool) > target_hi:
+        cand = pool.head(target_hi).copy()
+        bound_by = "target"
+        note = (f"top {target_hi} by preliminary priority score "
+                f"(cut at {cand['preliminary_priority_score'].min():.1f}; "
+                f"{len(pool)} cleared the {floor:.0f} floor)")
     else:
         cand = pool.copy()
-        note = f"all eligible names scoring >= {MIN_SELECT_SCORE} ({len(cand)} names)"
+        bound_by = "floor"
+        note = (f"all {len(cand)} eligible names scoring >= {floor:.0f} - the "
+                f"hard floor bound before the {target_hi} target")
+    ctx.state["selection_bound_by"] = bound_by
+    ctx.state["score_floor"] = floor
 
     if len(cand):
         q1, q2 = cand["preliminary_priority_score"].quantile([1 / 3, 2 / 3])
@@ -265,5 +282,6 @@ def run(ctx: RunContext) -> StageResult:
 
     return StageResult(stage=STAGE, rows_in=len(uni), rows_out=len(cand),
                        artifacts=artifacts,
-                       detail={"selected": len(cand), "selection_note": note,
+                       detail={"selected": len(cand), "bound_by": bound_by,
+                               "selection_note": note,
                                "source_records": len(slog)})

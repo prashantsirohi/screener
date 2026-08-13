@@ -187,8 +187,23 @@ def run(ctx: RunContext) -> StageResult:
           f"{not_friday} bars off-Friday")
 
     dq_low = int((cand["data_quality_confidence"] == "Low").sum()) if len(cand) else 0
-    check("QC17", "Candidate set is within the 100-150 target",
-          100 <= len(cand) <= 150, f"{len(cand)} candidates, {dq_low} rated Low quality")
+    sc = ctx.settings.screen
+    floor, lo, hi = sc.min_select_score, sc.candidate_target_low, sc.candidate_target_high
+    # A short list is only acceptable when the floor is what produced it. Below
+    # the target with names still above the floor means selection dropped
+    # something it should have kept, which is a bug, not a thin market.
+    above = int((pd.to_numeric(uni.loc[uni["eligible_flag"] == 1,
+                                       "preliminary_priority_score"],
+                               errors="coerce") >= floor).sum())
+    if len(cand) >= lo:
+        ok, why = len(cand) <= hi, f"{len(cand)} candidates"
+    else:
+        ok = len(cand) == above
+        why = (f"{len(cand)} candidates - the {floor:.0f} floor bound before the "
+               f"{lo}-{hi} target" if ok else
+               f"{len(cand)} candidates but {above} cleared the {floor:.0f} floor")
+    check("QC17", "Candidate count is explained by the target or the score floor",
+          ok, f"{why}, {dq_low} rated Low quality")
 
     dup_sym = uni["symbol"].duplicated().sum()
     check("QC18", "No duplicate symbols", dup_sym == 0, f"{dup_sym} duplicates")

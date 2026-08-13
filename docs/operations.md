@@ -29,6 +29,7 @@ Environment variables, or a `.env` alongside `pyproject.toml`.
 | `SCREENER_PRICE_BASIS` | `split_bonus` | `yahoo_adjclose` or `split_bonus`. See the basis note below |
 | `SCREENER_TECHNICAL_GATE` | `default` | `off`, `default`, or a `\|`-separated list of Weinstein stage names to exclude |
 | `SCREENER_TECHNICAL_GATE_MIN_RS` | unset | Optional 13-week relative-strength floor, in percent |
+| `SCREENER_MIN_SELECT_SCORE` | `60` | Hard candidate score floor, 0-100. See the floor note below |
 | `SCREENER_SESSION_COOKIE` | unset | Optional screener.in session cookie. Do not automate login; check their terms |
 | `DATA_ROOT` / `REPORTS_ROOT` / `LOGS_ROOT` | `./data`, `./reports`, `./logs` | Move artifacts off the project tree |
 | `SCREENER_LOG_LEVEL` | `INFO` | |
@@ -181,6 +182,63 @@ resolve by hand.
 
 **Stranded retry claims.** A crash mid-claim leaves rows `in_flight`; the lease
 timeout returns them to `pending` on the next drain.
+
+## The candidate score floor
+
+Selection is **everything scoring at or above the floor, capped at 150** — not
+"top 150". The floor is hard: a weak market yields fewer than 150 rather than
+padding the queue to hit a number, so the candidate count carries information.
+
+The default floor is **60**, and `SCREENER_MIN_SELECT_SCORE` overrides it.
+
+Every run reports which constraint bound:
+
+```
+bound_by=target   top 150 by preliminary priority score
+                  (cut at 67.1; 307 cleared the 60 floor)
+
+bound_by=floor    all 39 eligible names scoring >= 75
+                  - the hard floor bound before the 150 target
+```
+
+`bound_by=floor` is the interesting state: the market did not offer a full queue
+at your quality bar.
+
+### Why 60
+
+It is anchored to a structural break in the score distribution, not to whatever
+count it produces. Component means across the eligible set:
+
+| band | n | financial /20 | archetype /25 | catalyst /20 | valuation /15 |
+|---|---:|---:|---:|---:|---:|
+| 75+ | 39 | 17.6 | 20.8 | 15.5 | 9.9 |
+| 70–75 | 60 | 17.3 | 18.8 | 11.7 | 8.8 |
+| 67–70 | 52 | 17.1 | 16.6 | 11.6 | 7.5 |
+| 64–67 | 51 | 16.3 | 15.7 | 11.2 | 6.9 |
+| 60–64 | 105 | 15.4 | 15.1 | 9.0 | 6.8 |
+| **<60** | **481** | **12.0** | **11.6** | **6.9** | **3.8** |
+
+From 75 down to 60 the profile degrades smoothly. Below 60 every component falls
+away together — valuation plausibility nearly halves. Above 60 is a weak thesis;
+below it is the absence of one.
+
+Sensitivity, on the 2026-08-13 run (788 eligible):
+
+| floor | clear it | selected |
+|---:|---:|---:|
+| 60 | 307 | 150 |
+| 65 | 188 | 150 |
+| 68 | 136 | 136 |
+| 70 | 99 | 99 |
+| 75 | 39 | 39 |
+
+At 60 the floor does not bind today — the market genuinely offers 307 names above
+the bar — so you still get 150. Raise it if the Phase 2 research queue should be
+shorter than the market allows.
+
+`QC17` accepts a short list **only when the count equals the number above the
+floor**. Fewer candidates than that means selection dropped something it should
+have kept, which is a bug rather than a thin market.
 
 ## The technical gate
 

@@ -34,9 +34,13 @@ Axis C is a **gate**, not just a label: `Stage 3 distribution` and `Stage 4
 decline` are excluded from eligibility, on the view that neither is ownable
 however good the business is. Configurable via `SCREENER_TECHNICAL_GATE`.
 
+Selection is then everything scoring at or above a **hard floor** (default 60),
+capped at 150 — so a weak market produces fewer candidates rather than padding
+the queue, and each run records whether the floor or the target bound it.
+
 ## Current state
 
-Phase 1 is complete and passes **290 tests**. Phases 2 (forensic validation and
+Phase 1 is complete and passes **304 tests**. Phases 2 (forensic validation and
 valuation) and 3 (technical confirmation and portfolio construction) are not
 built; the schema and point-in-time design do not preclude them.
 

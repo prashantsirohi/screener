@@ -111,7 +111,16 @@ class ScreenSettings:
     min_weekly_bars: int = 40
     candidate_target_low: int = 100
     candidate_target_high: int = 150
-    min_select_score: float = 45.0
+    # A HARD floor, not a formality. Selection is everything at or above it,
+    # capped at candidate_target_high - so a weak market yields fewer than the
+    # target rather than padding the queue to hit a number.
+    #
+    # 60 is where the score stops describing a weak thesis and starts describing
+    # the absence of one. Across the eligible set the components degrade smoothly
+    # from 75 down to 60 and then fall off together: mean valuation plausibility
+    # 6.8 -> 3.8 and archetype evidence 15.1 -> 11.6 crossing that line. It is
+    # anchored to that break rather than to whatever count it happens to produce.
+    min_select_score: float = 60.0
     # Technical gate. Weinstein's own doctrine is that Stage 3 is topping and
     # Stage 4 is declining, and neither is ownable however good the business is.
     # Before this existed the stage was worth at most 5 of 100 score points and
@@ -207,8 +216,21 @@ def _screen_settings() -> ScreenSettings:
             f"SCREENER_TECHNICAL_GATE_MIN_RS must be a number in percent, "
             f"got {rs_raw!r}") from None
 
+    floor_raw = (_env("SCREENER_MIN_SELECT_SCORE") or "").strip()
+    try:
+        floor = float(floor_raw) if floor_raw else defaults.min_select_score
+    except ValueError:
+        raise ValueError(
+            f"SCREENER_MIN_SELECT_SCORE must be a number 0-100, "
+            f"got {floor_raw!r}") from None
+    if not 0 <= floor <= 100:
+        raise ValueError(
+            f"SCREENER_MIN_SELECT_SCORE must be within the 0-100 score range, "
+            f"got {floor}")
+
     return dataclasses.replace(defaults, technical_gate_exclude_stages=stages,
-                               technical_gate_min_rs_13w=min_rs)
+                               technical_gate_min_rs_13w=min_rs,
+                               min_select_score=floor)
 
 
 def load_settings(domain: DataDomain = "operational",
