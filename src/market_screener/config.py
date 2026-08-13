@@ -27,10 +27,17 @@ AnalyticsMode = Literal["attach", "parquet"]
 # dividend yield, and relative strength divides a stock by a benchmark that must
 # be on the same basis to mean anything.
 #
-# The default stays yahoo_adjclose because the benchmark indices only exist on
-# that basis - they are not in bhavcopy. Moving to split_bonus is the deliberate
-# cutover step, and needs price-return index series first.
-PriceBasis = Literal["yahoo_adjclose", "split_bonus"]
+# The default is `split_bonus` - exchange-published prices adjusted for splits
+# and bonuses. It is the analytically correct basis for stage analysis, since a
+# Weinstein chart is a price chart, and it is primary-sourced rather than
+# aggregated. Measured against the Yahoo basis it gives better technical
+# coverage (2,051 securities against 1,954), near-identical eligibility and 146
+# of 150 candidates unchanged.
+#
+# `yahoo_adjclose` remains available and is what the frozen parity baseline was
+# built on, so the parity suite pins to it explicitly rather than following this
+# setting.
+PriceBasis = Literal["split_bonus", "yahoo_adjclose"]
 
 
 def _env(key: str, default: str | None = None) -> str | None:
@@ -118,7 +125,7 @@ class Settings:
     http: HttpSettings
     screen: ScreenSettings
     analytics_mode: AnalyticsMode = "attach"
-    price_basis: PriceBasis = "yahoo_adjclose"
+    price_basis: PriceBasis = "split_bonus"
     screener_session_cookie: str | None = field(default=None, repr=False)
     log_level: str = "INFO"
 
@@ -156,9 +163,9 @@ def load_settings(domain: DataDomain = "operational",
     if mode not in ("attach", "parquet"):
         mode = "attach"
 
-    basis = (_env("SCREENER_PRICE_BASIS", "yahoo_adjclose") or "yahoo_adjclose").lower()
+    basis = (_env("SCREENER_PRICE_BASIS", "split_bonus") or "split_bonus").lower()
     if basis not in ("yahoo_adjclose", "split_bonus"):
-        basis = "yahoo_adjclose"
+        basis = "split_bonus"
 
     return Settings(
         project_root=root,

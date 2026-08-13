@@ -34,6 +34,9 @@ def _cmd_doctor(args) -> int:
     print(f"  data root         {st.paths.data_root}")
     print(f"  reports root      {st.paths.reports_root}")
     print(f"  logs root         {st.paths.logs_root}")
+    print(f"  price basis       {st.price_basis}"
+          + ("  (price return, exchange-sourced)" if st.price_basis == "split_bonus"
+             else "  (total return, aggregator-sourced)"))
     print(f"  config hash       {st.config_hash()}")
 
     db = Database(st.pg)

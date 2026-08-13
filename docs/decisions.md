@@ -298,9 +298,20 @@ The 117 stage flips are explicable. 53 are coverage differences — one basis ha
 small cumulative dividend difference tips a moving-average slope across the ±1.5%
 flat band. At the latest bar the two series are identical to 0.0000%.
 
-The default has not been changed; that is a live decision rather than a
-measurement. But the evidence no longer argues against it, and the remaining
-exclusions are 35 demerger-affected securities the parser cannot handle.
+**The default is now `split_bonus`.** The technical layer is primary-sourced end
+to end — exchange prices, exchange index benchmarks, exchange corporate actions —
+and runs on the basis stage analysis actually calls for.
+
+Two consequences worth holding on to:
+
+* **The parity suite pins to `yahoo_adjclose` explicitly.** The frozen baseline
+  predates the rewrite and was built on that basis, and the suite exists to prove
+  the *port* changed no answers. Following the default would conflate that with
+  the basis question. `test_phase1_row_parity` constructs the baseline-basis
+  config hash and matches on it; producing a run on the other basis is a
+  documented prerequisite rather than an accident.
+* **35 demerger-affected securities still fall back to Yahoo.** They are the
+  residual, not a silent gap — `screener status` counts them.
 
 ### F21 — On the price-return basis, distrusted series had no fallback
 

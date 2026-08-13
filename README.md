@@ -138,7 +138,9 @@ as-of query cannot see a number that had not been published yet.
 **One return basis per run.** Yahoo's adjusted close is total return; a bhavcopy
 series adjusted for splits and bonuses is price return. Mixing them inside one
 lookback steps the series by the cumulative dividend yield and corrupts every
-moving average spanning the seam.
+moving average spanning the seam. The default is `split_bonus` — exchange-sourced
+price return, which is the correct basis for stage analysis since a Weinstein
+chart is a price chart.
 
 **Raw payloads are retained.** A parser fix can be replayed over every page
 already collected (`rebuild-facts`) without re-fetching anything.
@@ -153,10 +155,15 @@ chosen — including the bugs that forced them.
 |---|---|---|
 | NSE `EQUITY_L` | Universe definition | Primary |
 | NSE bhavcopy (UDiFF and legacy) | Daily OHLC, volume, **turnover** | Primary |
+| NSE index closes | Price-return benchmark series | Primary |
 | NSE corporate actions feed | Splits and bonuses | Primary |
 | NSE corporate announcements | Event classification, governance flags | Primary |
 | screener.in company pages | Fundamentals | Secondary |
-| Yahoo Finance | Weekly bars and benchmark indices | Secondary |
+| Yahoo Finance | Fallback weekly bars | Secondary |
+
+The technical layer is primary-sourced end to end: exchange prices, exchange
+indices, exchange corporate actions. Yahoo remains as a fallback for the 35
+securities whose adjustment is known to be incomplete.
 
 Fundamentals are aggregator-sourced and treated as secondary throughout: adequate
 for discovery, but anything material must be confirmed against the filing itself.

@@ -73,25 +73,40 @@ def db():
     return d
 
 
+BASELINE_BASIS = "yahoo_adjclose"
+
+
 @pytest.fixture(scope="module")
 def latest_run(db):
     """
-    The most recent run on the CONFIGURED price basis.
+    The most recent run on the basis the FROZEN BASELINE was built on.
 
-    An exploratory run on the other basis must not be picked up as the thing to
-    compare against the baseline - it would measure the basis change rather than
-    the port. config_hash includes price_basis, so matching on it selects runs
-    that are actually comparable.
+    Deliberately not the configured default. The baseline predates the rewrite
+    and was produced on yahoo_adjclose; the production default is now
+    split_bonus. This suite exists to prove the PORT changed no answers, so it
+    must compare like with like - measuring the basis change here would conflate
+    two entirely different questions, and the basis comparison has its own
+    treatment in docs/decisions.md (F20, F23).
+
+    config_hash covers price_basis, so building the baseline-basis variant and
+    matching on its hash selects a genuinely comparable run.
     """
+    import dataclasses
+
     from market_screener.config import load_settings
-    want = load_settings().config_hash()
+
+    want = dataclasses.replace(load_settings(),
+                               price_basis=BASELINE_BASIS).config_hash()
     rid = db.fetch_value("""
         SELECT run_id FROM market.screen_run
         WHERE  phase = 1 AND status = 'complete' AND config_hash = %s
         ORDER  BY started_at DESC LIMIT 1
     """, (want,))
     if not rid:
-        pytest.skip("no completed Phase 1 run on the configured basis")
+        pytest.skip(
+            f"no completed Phase 1 run on the {BASELINE_BASIS} basis to compare "
+            f"against the frozen baseline; produce one with "
+            f"SCREENER_PRICE_BASIS={BASELINE_BASIS} screener screen --force")
     return rid
 
 

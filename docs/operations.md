@@ -180,13 +180,19 @@ resolve by hand.
 **Stranded retry claims.** A crash mid-claim leaves rows `in_flight`; the lease
 timeout returns them to `pending` on the next drain.
 
-## The price-basis cutover
+## The price basis
 
-The technical layer runs on `yahoo_adjclose`. Moving to `split_bonus` (bhavcopy,
-price return) is now **mechanically possible** — NSE's `ind_close_all_<date>.csv`
-supplies price-return series for all twelve benchmark indices, which was the
-blocker — but the evidence does not yet justify it. See
-[decisions.md F20](decisions.md) for the measurement.
+**The default is `split_bonus`** — exchange-published prices adjusted for splits
+and bonuses, i.e. price return. That is the correct basis for stage analysis (a
+Weinstein chart is a price chart) and makes the technical layer primary-sourced
+end to end: exchange prices, exchange index benchmarks, exchange corporate
+actions.
+
+`yahoo_adjclose` (total return) remains available via `SCREENER_PRICE_BASIS` and
+is what the frozen parity baseline was built on, so the parity suite pins to it
+explicitly rather than following the default.
+
+### How the cutover was decided
 
 Both objections that previously argued against it have been resolved — history
 length (both bases now run to five years) and the size of the trusted universe
@@ -209,9 +215,12 @@ The remaining 35 exclusions are **demergers**, which the corporate-actions parse
 skips because splitting value across the resulting entities needs data the feed
 does not carry.
 
-The default has not been switched: that changes what every future run produces
-and is a decision to take deliberately, not a side effect of a measurement. To
-take it, run the comparison below, review the diff, then set the variable.
+To reverse it, or to compare the two bases again:
+
+```bash
+SCREENER_PRICE_BASIS=yahoo_adjclose screener screen --force
+screener runs diff <split_bonus_run> <yahoo_run>
+```
 
 Progress on the residual is visible in:
 
