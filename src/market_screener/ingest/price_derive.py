@@ -49,6 +49,36 @@ def _arrow(con, sql: str, params: dict | None = None) -> pa.Table:
     return tbl.read_all() if isinstance(tbl, pa.RecordBatchReader) else tbl
 
 
+# Price ratios that real Indian corporate actions produce.
+#
+# Splits are face-value ratios (10->1, 10->2, 10->5, 5->1, 2->1). Bonuses of a:b
+# give b/(a+b), so 1:1 -> 0.5, 1:2 -> 0.667, 2:1 -> 0.333, and so on.
+#
+# The list is explicit rather than derived from Fraction.limit_denominator(),
+# which finds a "clean" fraction for almost any number - 1.17 becomes 7/6 - and
+# therefore classified ordinary dividend divergence as a missing split.
+# Splits and bonuses always REDUCE the price, so their ratios are below 1.
+_SPLIT_AND_BONUS_RATIOS = (
+    0.05, 0.1, 0.125, 0.1667, 0.2, 0.25, 0.3333, 0.4, 0.5,
+    0.6, 0.625, 0.6667, 0.75, 0.8, 0.8333,
+)
+# Consolidations raise it, and only at whole-number ratios: 2:1, 5:1, 10:1. The
+# inverses of the bonus ratios (1.2, 1.25, 1.333, 1.5) are NOT corporate actions
+# and must not be listed - they blanket the 1.1-1.5 band where dividend
+# divergence lives, and including them matched 24 of 34 arbitrary values.
+_CONSOLIDATION_RATIOS = (2.0, 2.5, 3.0, 4.0, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0)
+
+_ACTION_RATIOS = tuple(sorted(_SPLIT_AND_BONUS_RATIOS + _CONSOLIDATION_RATIOS))
+_RATIO_TOLERANCE = 0.03      # 3% - tight enough to exclude a 15% dividend
+
+
+def _is_action_ratio(step: float, min_move: float = 0.10) -> bool:
+    """Does this step land on a ratio a split, bonus or consolidation produces?"""
+    if not step or step <= 0 or abs(step - 1.0) < min_move:
+        return False
+    return any(abs(step - r) <= _RATIO_TOLERANCE * r for r in _ACTION_RATIOS)
+
+
 def _rows(table: pa.Table, columns) -> list[tuple]:
     cols = [table.column(c).to_pylist() for c in columns]
     return list(zip(*cols))
@@ -185,6 +215,13 @@ def reconcile_sources(settings: Settings, db: Database, as_of: date) -> dict:
                        ROW_NUMBER() OVER (PARTITION BY security_id
                                           ORDER BY week_end_date DESC) AS rn
                 FROM paired
+            ),
+            biggest AS (
+                -- The single largest step per security, and its signed ratio, so
+                -- the caller can test whether it lands on a clean split ratio.
+                SELECT DISTINCT ON (security_id) security_id, step
+                FROM   stepped WHERE step IS NOT NULL
+                ORDER  BY security_id, ABS(step - 1) DESC
             )
             SELECT r.security_id,
                    COUNT(*)                                              AS weeks_compared,
@@ -192,34 +229,44 @@ def reconcile_sources(settings: Settings, db: Database, as_of: date) -> dict:
                             THEN 1 ELSE 0 END)                           AS weeks_matching,
                    MAX(ABS(s.step - 1)) * 100                            AS max_step_pct,
                    MEDIAN(ABS(r.ratio - 1)) * 100                        AS median_diff_pct,
-                   SUM(CASE WHEN r.rn <= 13 THEN 1 ELSE 0 END)           AS recent_weeks
+                   SUM(CASE WHEN r.rn <= 13 THEN 1 ELSE 0 END)           AS recent_weeks,
+                   MAX(b.step)                                           AS biggest_step
             FROM ranked r
             LEFT JOIN stepped s
                    ON s.security_id = r.security_id
                   AND s.week_end_date = r.week_end_date
+            LEFT JOIN biggest b ON b.security_id = r.security_id
             GROUP BY r.security_id
         """)
 
     rows = []
-    for sid, cmp_, match, step, med, recent in zip(
+    for sid, cmp_, match, step, med, recent, biggest in zip(
             tbl.column("security_id").to_pylist(),
             tbl.column("weeks_compared").to_pylist(),
             tbl.column("weeks_matching").to_pylist(),
             tbl.column("max_step_pct").to_pylist(),
             tbl.column("median_diff_pct").to_pylist(),
-            tbl.column("recent_weeks").to_pylist()):
+            tbl.column("recent_weeks").to_pylist(),
+            tbl.column("biggest_step").to_pylist()):
         step = float(step or 0.0)
         recent = max(int(recent or 0), 1)
         recent_ok = (match or 0) / recent
+
+        # A step alone is not evidence of a missing split. A special dividend or
+        # a rights issue moves Yahoo's total-return series and not the
+        # price-return one, and does so by an untidy amount: measured across the
+        # universe, 517 of 566 large steps imply no clean ratio at all. Only a
+        # step that lands on a ratio a real action produces counts.
+        snaps_clean = _is_action_ratio(float(biggest)) if biggest else False
+
         if cmp_ < 8:
             verdict = "insufficient"
-        elif step >= 10.0:
-            # A sudden jump in the ratio between two adjacent weeks means one
-            # series applied an adjustment the other did not.
+        elif step >= 10.0 and snaps_clean:
             verdict = "missed_action"
         elif recent_ok >= 0.9:
             verdict = "agree"
-        elif recent_ok >= 0.6:
+        elif recent_ok >= 0.6 or step >= 10.0:
+            # Diverges, but not at a ratio any corporate action would produce.
             verdict = "drift"
         else:
             verdict = "disagree"

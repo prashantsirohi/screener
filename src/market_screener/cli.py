@@ -160,6 +160,56 @@ def _cmd_status(args) -> int:
         print(f"  blank pages quarantined: {blanks}")
     except Exception:
         pass
+
+    # ---- reconciliation, with its trend --------------------------------------
+    from .pipeline import health
+
+    snaps = health.reconciliation_snapshots(db)
+    if snaps:
+        cur = health._verdicts(db, snaps[0])
+        prev = health._verdicts(db, snaps[1]) if len(snaps) > 1 else {}
+        total = sum(cur.values())
+        print(f"\nprice-source reconciliation (as of {snaps[0]}"
+              + (f", previous {snaps[1]}" if len(snaps) > 1 else "") + ")")
+        for verdict in ("agree", "drift", "insufficient", "disagree", "missed_action"):
+            n = cur.get(verdict)
+            if n is None:
+                continue
+            if prev:
+                d = n - prev.get(verdict, 0)
+                delta = f"{d:+d}" if d else "   ="
+            else:
+                delta = ""
+            flag = "  <- unfound corporate actions" if verdict == "missed_action" else ""
+            print(f"  {verdict:<16} {n:>6} {delta:>6}{flag}")
+        if total:
+            missed = cur.get("missed_action", 0) + cur.get("disagree", 0)
+            print(f"  {'':<16} {missed / total * 100:>5.1f}% of {total} compared")
+
+        worst = health.worst_unreconciled(db, 5)
+        if worst:
+            print("\n  largest unexplained steps")
+            for w in worst:
+                print(f"    {w['symbol']:<14} {str(w['verdict']):<14} "
+                      f"step {w['step_pct']}%  over {w['weeks_compared']} weeks")
+
+    # ---- alerts ---------------------------------------------------------------
+    checks = health.run_all(db)
+    firing = [c for c in checks if c.level in ("warn", "alert")]
+    print("\nalerts")
+    if not firing:
+        print("  none - everything within thresholds")
+    for c in sorted(firing, key=lambda x: 0 if x.level == "alert" else 1):
+        print(f"  [{c.level.upper():<5}] {c.name}: {c.message}")
+        if c.detail:
+            print(f"          {c.detail}")
+    if args.verbose:
+        for c in checks:
+            if c.level == "ok":
+                print(f"  [ OK   ] {c.name}: {c.message}")
+
+    if args.strict and firing:
+        return 1
     return 0
 
 
@@ -457,7 +507,12 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--target", help="stop at this migration version, e.g. 0005")
     m.set_defaults(func=_cmd_migrate)
 
-    s = sub.add_parser("status", help="row counts, watermarks, retry queue")
+    s = sub.add_parser("status",
+                       help="row counts, watermarks, reconciliation trend, alerts")
+    s.add_argument("--strict", action="store_true",
+                   help="exit non-zero if any alert is firing (for scheduled runs)")
+    s.add_argument("--verbose", action="store_true",
+                   help="also show checks that are passing")
     s.set_defaults(func=_cmd_status)
 
     sy = sub.add_parser("sync", help="incrementally refresh a data source")

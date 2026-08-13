@@ -97,13 +97,62 @@ adjusted prices and weekly bars are all functions of the daily series.
 ## Monitoring
 
 ```bash
-screener status
+screener status                  # counts, watermarks, reconciliation trend, alerts
+screener status --verbose        # also show checks that are passing
+screener status --strict         # exit non-zero if any alert fires
 ```
 
-Reports row counts, per-source watermarks with their last status, retry-queue
-depth by state, and how many pages are quarantined.
+`--strict` is what a scheduled run should use, so a failing check surfaces
+instead of scrolling past in a log.
 
-Worth watching:
+### The reconciliation panel
+
+```
+price-source reconciliation (as of 2026-08-13, previous 2026-08-11)
+  agree              1747   +128
+  drift                57    +15
+  disagree            115     -1
+  missed_action        35   -141  <- unfound corporate actions
+                     1.8% of 1954 compared
+
+  largest unexplained steps
+    NYKAA          missed_action  step 83.3%  over 248 weeks
+```
+
+`missed_action` is the number to watch: a price step landing on a ratio a split
+or bonus actually produces, which one series applied and the other did not. Each
+one is an action the pipeline has not found, and those securities fall back to
+Yahoo — on the price-return basis they would be excluded outright.
+
+It is deliberately kept separate from `disagree`, which is a series that drifts
+apart *without* such a step. That is a data-quality question, not a missing
+action, and summing the two makes the alert impossible to reconcile against the
+table above it.
+
+When `missed_action` rises:
+
+```bash
+screener derive --what actions              # re-read the NSE feed
+screener derive --what actions-divergence   # recover using Yahoo as a second opinion
+screener derive --what adjusted --what weekly
+```
+
+The residual is dominated by **demergers**, which the parser deliberately skips —
+splitting value across the resulting entities needs data the feed does not carry.
+Those need manual handling or an external source.
+
+### Thresholds
+
+| Check | warn | alert |
+|---|---|---|
+| `missed_action` share | ≥10% | ≥20% |
+| `missed_action` rise between snapshots | ≥25 securities | — |
+| Blank fundamentals pages | ≥1 | >100 |
+| Retry queue `exhausted` | — | ≥1 |
+| Watermark age | >5 days | — |
+| QC failures on the latest run | — | ≥1 |
+
+Also worth watching:
 
 - **Retry queue `pending` not falling.** The drip is not running, or the source
   is refusing.
@@ -111,8 +160,6 @@ Worth watching:
   screen; investigate before trusting a run's coverage.
 - **`sync_batch` rows stuck in `running`.** A process died. The next run reaps
   them to `interrupted`.
-- **Reconciliation verdicts.** A rising `missed_action` count means corporate
-  actions are being missed.
 
 ## Recovering from a failure
 

@@ -268,6 +268,36 @@ candidate list.
 out visibly as `EX_NO_PRICE_HISTORY` rather than carrying a plausible but wrong
 stage. Having no series is better than having a known-bad one.
 
+### F22 — The reconciliation verdict over-flagged by 9x
+
+Adding a `missed_action` alert to `status` exposed that the metric it reports was
+mostly wrong. The verdict classified *any* ratio step above 10% as a missing
+corporate action. But a special dividend or a rights issue moves Yahoo's
+total-return series and not the price-return one, by an untidy amount — measured
+across the universe, 517 of 566 large steps implied no clean ratio at all.
+
+Requiring the step to land on a ratio a real action produces took the count from
+**304 to 87**. Then a test caught the second half of the problem: the ratio table
+had been built by inverting every entry, which put 1.2, 1.25, 1.333 and 1.5 in
+it. Those are not corporate actions — no consolidation raises a price by half —
+and they blanket exactly the band where dividend divergence lives. A selectivity
+test showed 24 of 34 arbitrary values matching. Splits and bonuses always reduce
+the price; consolidations only occur at whole-number ratios.
+
+| | missed_action | agree |
+|---|---|---|
+| Original: any step ≥10% | 304 | 1,496 |
+| Step must snap to an action ratio | 87 | 1,697 |
+| Bonus inverses removed | **35** | **1,747** |
+
+The residual 35 are dominated by **demergers** — Siemens, Raymond, Nykaa — which
+the corporate-actions parser deliberately skips, because splitting value across
+the resulting entities needs data the feed does not carry.
+
+The lesson is about alerts specifically: an alert is only as good as the metric
+behind it. Wiring one up is what forced the metric to be examined, and the metric
+was wrong by a factor of nine.
+
 ### F19 — A skipped stage left the run empty
 
 `s80` correctly skipped on an unchanged input hash, and `s85` then failed on a
