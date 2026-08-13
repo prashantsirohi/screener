@@ -212,6 +212,57 @@ Two checks queried a table nothing ever wrote, so they passed vacuously. The
 screen now persists the diagnostic metrics they audit, and the cyclical check
 reports meaningfully.
 
+### F20 — The price-return cutover is possible but not yet justified
+
+The blocker was that benchmark indices existed only on the Yahoo (total-return)
+basis. NSE's `ind_close_all_<DDMMYYYY>.csv` turns out to publish OHLC for ~163
+indices, which is price return by construction — so all twelve benchmarks now
+have `split_bonus` series and the cutover is mechanically available.
+
+Measuring it, though, argues against adopting it yet. Running the same screen on
+both bases:
+
+| | yahoo_adjclose | split_bonus |
+|---|---|---|
+| Securities with ≥40 weeks | 1,930 | 2,099 |
+| Longest history | 261 weeks | 157 weeks |
+| Eligible | 1,106 | 1,097 |
+| Candidates unchanged | — | 146 of 150 |
+| Technical stage flips | — | 151 |
+
+Two problems.
+
+**The flips are not explained by the basis change.** If the difference were the
+dividend treatment, flipped names would skew toward dividend payers. They do not:
+the flipped set has a *median dividend yield of 0.000* against 0.180 for the
+unflipped. Something other than the basis is moving those stages, and the plan's
+exit condition — every flip explained — is therefore unmet.
+
+**The history is short.** 157 weeks against a base-detection lookback of up to
+130 leaves 27 weeks of margin; Yahoo's 261 is comfortable. Weinstein analysis
+wants a long window and this one is tight.
+
+Adopting the change now would trade a well-understood series for a shorter one
+with unexplained differences. The default stays `yahoo_adjclose`. The
+preconditions are recorded in [operations.md](operations.md): backfill bhavcopy
+to five years, and resolve the 344 non-reconciling securities.
+
+Worth noting what the work did buy: the blocker is gone, bhavcopy covers more
+securities than Yahoo, and the distrust guard below exists because of it.
+
+### F21 — On the price-return basis, distrusted series had no fallback
+
+Reconciliation demotes a security whose bhavcopy history fails to reconcile, and
+`weekly_bar_resolved` serves Yahoo instead. But a run pinned to `split_bonus`
+filters to that basis *before* electing a source, so the Yahoo fallback is not
+available — those 344 securities were silently served the very series
+reconciliation had already concluded was wrong, and 20 of them reached the
+candidate list.
+
+`weekly_series.sql` now excludes them outright on that basis. The company drops
+out visibly as `EX_NO_PRICE_HISTORY` rather than carrying a plausible but wrong
+stage. Having no series is better than having a known-bad one.
+
 ### F19 — A skipped stage left the run empty
 
 `s80` correctly skipped on an unchanged input hash, and `s85` then failed on a

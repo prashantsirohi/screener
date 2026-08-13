@@ -19,11 +19,25 @@
 --
 -- Parameters: $as_of (date), $adj_basis (text)
 
-WITH filtered AS (
-    SELECT *
-    FROM   src_weekly_bar_all
-    WHERE  week_end_date <= $as_of
-      AND  adj_basis = $adj_basis
+WITH distrusted AS (
+    -- Securities whose bhavcopy-derived history failed reconciliation. On the
+    -- Yahoo basis they simply fall back; on the price-return basis there is no
+    -- fallback, because Yahoo is a different basis and mixing is forbidden.
+    --
+    -- Silently using a series we have already concluded is wrong would be worse
+    -- than having no series: the company drops out visibly as
+    -- EX_NO_PRICE_HISTORY instead of carrying a plausible but wrong stage.
+    SELECT security_id
+    FROM   src_price_reconciliation
+    WHERE  verdict IN ('missed_action', 'disagree')
+),
+filtered AS (
+    SELECT w.*
+    FROM   src_weekly_bar_all w
+    WHERE  w.week_end_date <= $as_of
+      AND  w.adj_basis = $adj_basis
+      AND  NOT (w.source = 'nse_bhavcopy'
+                AND w.security_id IN (SELECT security_id FROM distrusted))
 ),
 coverage AS (
     SELECT security_id,

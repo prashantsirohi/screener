@@ -248,6 +248,7 @@ def sync(db: Database, *, backfill_days: int | None = None,
 
     fetched = holidays = failed = pending = 0
     rows_total = 0
+    registered_any = False
     newest: date | None = None
 
     for d in candidates:
@@ -274,6 +275,7 @@ def sync(db: Database, *, backfill_days: int | None = None,
         added = _register_new_symbols(db, day.frame, smap)
         if added:
             smap = _symbol_map(db)
+            registered_any = True
 
         n = _write_day(db, day, smap)
         _mark_calendar(db, d, True, f"{day.layout} layout")
@@ -281,6 +283,19 @@ def sync(db: Database, *, backfill_days: int | None = None,
         fetched += 1
         newest = d if newest is None or d > newest else newest
         log.info("bhavcopy %s (%s): %d rows", d, day.layout, n)
+
+    # Registering a security is what makes previously-orphaned announcements
+    # linkable: they were imported when the symbol did not exist yet, so their
+    # security_id is NULL and they drop out of every event query. Relink here so
+    # it happens automatically rather than waiting for the next classify run.
+    relinked = 0
+    if registered_any:
+        from .classify_events import relink_announcements
+        relinked = sum(v for k, v in relink_announcements(db).items()
+                       if k.startswith("linked_by"))
+        if relinked:
+            log.info("relinked %d announcement(s) to newly registered securities",
+                     relinked)
 
     high_water = db.fetch_value("SELECT max(trade_date) AS m FROM market.price_daily")
     status = "complete" if failed == 0 else "partial"
@@ -292,5 +307,5 @@ def sync(db: Database, *, backfill_days: int | None = None,
 
     return {"status": status, "considered": len(candidates), "days_fetched": fetched,
             "holidays": holidays, "not_yet_published": pending, "failed": failed,
-            "rows": rows_total,
+            "rows": rows_total, "announcements_relinked": relinked,
             "watermark": str(high_water) if high_water else None}

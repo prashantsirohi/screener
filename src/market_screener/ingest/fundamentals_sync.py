@@ -22,6 +22,7 @@ import logging
 import random
 import time
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from ..config import Settings
 from ..db.connection import Database
@@ -236,6 +237,119 @@ def _store(db: Database, symbol: str, rec: dict, batch: str) -> int:
         """)
         drop_staging(cur, "m_in", "f_in")
     return len(facts)
+
+
+def stale_targets(db: Database, *, max_age_days: int, limit: int | None,
+                  as_of: date | None = None) -> list[dict]:
+    """
+    Companies whose fundamentals are due a refresh.
+
+    Two triggers, deliberately narrow. Refreshing all 2,086 pages on a schedule
+    is what provoked the throttle that emptied 307 of them in the first place;
+    the point of the gate is to keep steady state near ~25 pages a day.
+
+      * age - the cached page is older than the staleness window
+      * expected quarter - the last quarterly period on file is old enough that
+        the next results should have been declared
+
+    Ordered oldest-first so a capped run always makes progress on the worst.
+    """
+    as_of = as_of or date.today()
+    return db.fetch_all("""
+        SELECT s.security_id, s.symbol,
+               p.fetched_at::date AS last_fetched,
+               q.last_quarter
+        FROM   market.security s
+        LEFT JOIN LATERAL (
+            SELECT fetched_at FROM market.screener_page_raw
+            WHERE  security_id = s.security_id AND NOT is_blank
+            ORDER  BY fetched_at DESC LIMIT 1
+        ) p ON true
+        LEFT JOIN LATERAL (
+            SELECT max(report_date) AS last_quarter FROM market.screener_fact
+            WHERE  security_id = s.security_id AND period_type = 'quarter'
+        ) q ON true
+        WHERE  s.is_active AND s.series = 'EQ' AND s.security_type = 'equity'
+          AND (
+                p.fetched_at IS NULL
+             OR p.fetched_at::date < %(cutoff)s
+             OR (q.last_quarter IS NOT NULL
+                 AND q.last_quarter < %(quarter_cutoff)s)
+          )
+          AND NOT EXISTS (
+                SELECT 1 FROM market.fetch_retry_queue r
+                WHERE  r.source = %(source)s AND r.scope = s.symbol
+                  AND  r.state IN ('pending', 'in_flight'))
+        ORDER  BY p.fetched_at NULLS FIRST, s.symbol
+        LIMIT  %(limit)s
+    """, {"cutoff": as_of - timedelta(days=max_age_days),
+          # A quarter's results are normally out within ~45 days of period end,
+          # so a last-quarter older than ~135 days means we are behind.
+          "quarter_cutoff": as_of - timedelta(days=135),
+          "source": SOURCE, "limit": limit or 100})
+
+
+def refresh_stale(settings: Settings, db: Database, *, limit: int = 25,
+                  max_age_days: int | None = None, sleep_sec: float = 3.0,
+                  as_of: date | None = None) -> dict:
+    """Fetch and store the companies the staleness gate selects."""
+    mark_stale_batches(db)
+    reclaim_stale_claims(db)
+    max_age_days = max_age_days or settings.screen.fundamentals_max_age_days
+
+    targets = stale_targets(db, max_age_days=max_age_days, limit=limit, as_of=as_of)
+    if not targets:
+        return {"targets": 0, "note": "everything within the staleness window"}
+
+    bid = open_batch(db, SOURCE, {"mode": "refresh", "targets": len(targets),
+                                  "max_age_days": max_age_days})
+    client = screener_client(settings.screener_session_cookie,
+                             min_request_gap_sec=max(sleep_sec, 2.0))
+    client.warmup()
+
+    ok = blank = failed = 0
+    facts = 0
+    for i, t in enumerate(targets, 1):
+        rec, err = _fetch(client, t["symbol"], attempt=1)
+        if rec is not None:
+            facts += _store(db, t["symbol"], rec, bid)
+            ok += 1
+        elif err and err.startswith("blank"):
+            # Quarantine and queue rather than dropping the company.
+            blank += 1
+            db.execute("""
+                INSERT INTO market.fetch_retry_queue
+                    (source, scope, reason, attempts, state, next_attempt_at, last_error)
+                VALUES (%s, %s, 'blank_page', 1, 'pending',
+                        now() + interval '15 minutes', %s)
+                ON CONFLICT (source, scope) DO UPDATE SET
+                    state = 'pending', attempts = market.fetch_retry_queue.attempts + 1,
+                    next_attempt_at = now() + interval '15 minutes',
+                    last_error = EXCLUDED.last_error, updated_at = now()
+            """, (SOURCE, t["symbol"], err))
+        else:
+            failed += 1
+            record_error(db, bid, SOURCE, t["symbol"], err or "unknown")
+        if i % 25 == 0:
+            log.info("refresh %d/%d (ok=%d blank=%d failed=%d)",
+                     i, len(targets), ok, blank, failed)
+        time.sleep(sleep_sec + random.uniform(0, 1.5))
+
+    remaining = db.fetch_value("""
+        SELECT count(*) AS c FROM market.security s
+        LEFT JOIN LATERAL (
+            SELECT fetched_at FROM market.screener_page_raw
+            WHERE security_id = s.security_id AND NOT is_blank
+            ORDER BY fetched_at DESC LIMIT 1) p ON true
+        WHERE s.is_active AND s.series = 'EQ' AND s.security_type = 'equity'
+          AND (p.fetched_at IS NULL OR p.fetched_at::date < %s)
+    """, ((as_of or date.today()) - timedelta(days=max_age_days),))
+
+    close_batch(db, bid, status="complete" if failed == 0 else "partial",
+                total=len(targets), ok=ok, failed=failed, skipped=blank, rows=facts)
+    set_watermark(db, SOURCE, "refresh", str(as_of or date.today()), rows=facts)
+    return {"targets": len(targets), "refreshed": ok, "blank_quarantined": blank,
+            "failed": failed, "facts_written": facts, "still_stale": remaining}
 
 
 def rebuild_facts_from_payloads(db: Database, *, batch_size: int = 200) -> dict:

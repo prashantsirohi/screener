@@ -18,7 +18,12 @@ WITH daily AS (
         -- date_trunc('week') is Monday in DuckDB; +4 days lands on Friday.
         CAST(DATE_TRUNC('week', a.trade_date) + INTERVAL 4 DAY AS DATE) AS week_end_date,
         a.adj_open, a.adj_high, a.adj_low, a.adj_close, a.adj_volume,
-        p.turnover_inr
+        p.turnover_inr,
+        -- Carry the underlying daily source through rather than assuming
+        -- bhavcopy. Index closes come from a different file and would otherwise
+        -- be mislabelled, which matters because source is part of the weekly
+        -- primary key and drives the per-security election.
+        p.source AS daily_source
     FROM src_price_daily_adj a
     LEFT JOIN src_price_daily p
            ON p.security_id = a.security_id AND p.trade_date = a.trade_date
@@ -46,7 +51,7 @@ SELECT
     SUM(adj_volume)                                       AS volume,
     SUM(turnover_inr)                                     AS turnover_inr,
     CAST(COUNT(*) AS SMALLINT)                            AS day_count,
-    'nse_bhavcopy'                                        AS source,
+    COALESCE(MAX(daily_source), 'nse_bhavcopy')           AS source,
     CAST(100 AS SMALLINT)                                 AS source_rank,
     'split_bonus'                                         AS adj_basis,
     -- A week is only complete once its Friday has actually passed. A Monday

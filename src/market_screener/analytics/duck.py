@@ -35,8 +35,8 @@ log = logging.getLogger(__name__)
 # Tables the analytics layer is allowed to read.
 SOURCE_TABLES = ("security", "price_daily", "corporate_action", "price_daily_adj",
                  "weekly_bar", "weekly_bar_resolved", "weekly_bar_source_choice",
-                 "trading_calendar", "screener_fact", "metric_dim",
-                 "index_membership")
+                 "price_source_reconciliation", "trading_calendar",
+                 "screener_fact", "metric_dim", "index_membership")
 
 # The single cast point. Everything downstream sees DOUBLE, never NUMERIC.
 SRC_VIEWS = {
@@ -91,6 +91,15 @@ SRC_VIEWS = {
                is_complete, last_trade_date
         FROM   {src}.weekly_bar_resolved
         WHERE  is_complete
+    """,
+    "src_price_reconciliation": """
+        SELECT security_id, as_of_date, weeks_compared, weeks_matching,
+               CAST(max_step_pct AS DOUBLE) AS max_step_pct,
+               CAST(median_diff_pct AS DOUBLE) AS median_diff_pct,
+               verdict
+        FROM   {src}.price_source_reconciliation r
+        WHERE  as_of_date = (SELECT max(as_of_date)
+                             FROM {src}.price_source_reconciliation)
     """,
     "src_weekly_source_choice": """
         SELECT security_id, source, source_rank, adj_basis, bars,

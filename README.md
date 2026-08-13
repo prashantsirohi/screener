@@ -91,12 +91,30 @@ depth at any point.
 | `doctor` | Verify Python, Postgres, DuckDB extension, paths, migration head |
 | `migrate [--verify] [--target]` | Apply schema migrations; `--verify` reports drift without applying |
 | `status` | Row counts, watermarks, retry-queue depth, quarantined pages |
-| `sync --source {prices,shares,fundamentals}` | Incremental refresh. `--backfill N`, `--max-days N`, `--force`, `--retry-queue` |
+| `sync --source {prices,indices,announcements,documents,fundamentals,shares}` | Incremental refresh. `--backfill N`, `--max-days N`, `--force`, `--retry-queue` |
 | `derive --what {actions,actions-divergence,adjusted,weekly,reconcile,all}` | Rebuild corporate actions, adjusted prices, weekly bars, source reconciliation |
 | `classify-events [--diff]` | Classify announcements under both taxonomy versions |
 | `rebuild-facts` | Re-explode facts from retained page payloads after a parser fix — no re-fetching |
 | `screen [--as-of] [--force] [--resume] [--stages]` | Run Phase 1 and emit the hand-off |
+| `runs list \| show <id> \| diff <a> <b> \| prune` | Inspect and compare runs |
+| `export-parquet` | Materialise the source tables for the offline analytics mode |
 | `import-legacy-cache` | One-off import of the original JSON caches |
+
+`runs diff` is the payoff of retaining every run in full:
+
+```
+diff p1-2026-08-11-29f6a1fa  ->  p1-2026-08-11-faef83d3
+universe    in both 2086, only base 0, only other 0
+eligible    1106 -> 1097  (+2 / -11)
+candidates  150 -> 150  (entered 4, left 4, unchanged 146)
+  entered: AJAXENGG, BDL, BHARATSE, BSOFT
+  left   : GRAUWEIL, JAGRAN, KRISHNADEF, SUPREMEIND
+
+fields changed for companies in both runs
+  liquidity_value_inr_cr    595   3MINDIA: 12.9950 -> 13.1830
+  technical_stage           151   AAATECH: Mature Stage 1 base -> Stage 3 distribution
+  preliminary_priority_score 61   ARFIN: 42.70 -> 40.70
+```
 
 ## Design in brief
 

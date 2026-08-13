@@ -12,6 +12,7 @@ anything failing.
 | NSE bhavcopy | Daily OHLC, volume, turnover | Primary | `MAX(trade_date)` |
 | NSE index constituent files | Industry classification | Primary | snapshot date |
 | NSE corporate actions | Splits and bonuses | Primary | `MAX(ex_date)` |
+| NSE index closes | Price-return benchmark series | Primary | `MAX(trade_date)` |
 | NSE corporate announcements | Events, governance flags | Primary | `MAX(announced_at)` |
 | screener.in | Fundamentals | Secondary | per-security `fetched_at` |
 | Yahoo Finance | Weekly bars, benchmark indices | Secondary | per-security `MAX(week_end_date)` |
@@ -178,13 +179,28 @@ regardless of pacing.
 
 ---
 
+## NSE index closes
+
+`ind_close_all_<DDMMYYYY>.csv` publishes OHLC, volume and turnover for ~163
+indices. Twelve are tracked, mapped from NSE's display name ("Nifty 500") to the
+store's symbol (`NIFTY_500`) on a normalised key so spacing and casing changes do
+not break the mapping.
+
+This is the source that unblocks a price-return technical layer: the series is
+price return by construction, where Yahoo's is total return. Indices flow through
+the same machinery as equities — no corporate actions, so the adjustment factor
+stays 1.0 — and the resample yields `split_bonus` benchmarks.
+
+The sync reuses the equity trading calendar rather than probing dates itself:
+the exchange publishes both files on the same sessions.
+
+---
+
 ## Yahoo Finance
 
-Weekly adjusted bars and the twelve benchmark indices. Secondary, but currently
-load-bearing: **the indices exist only here**. Bhavcopy has no index series, so a
-price-return run has no benchmark to compute relative strength against. Moving
-the technical layer to a price-return basis requires price-return index series
-first.
+Weekly adjusted bars, and until the index-close collector existed, the only
+source of benchmark series. Still the default basis: it carries 261 weeks of
+history against bhavcopy's 157, which matters for a 130-week base lookback.
 
 **Quirk: weekly bars are stamped at week *start*.** Yahoo dates a weekly bar on
 the Monday; a bhavcopy resample lands on the week end. Joining a stock to a

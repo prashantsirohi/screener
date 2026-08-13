@@ -63,12 +63,22 @@ request rate the site has no reason to throttle.
 
 | When | Command |
 |---|---|
-| Weekdays 19:30 IST | `screener sync --source prices && screener derive --what all` |
+| Weekdays 19:30 IST | `screener sync --source prices` then `screener sync --source indices` |
+| Weekdays 19:45 IST | `screener derive --what all` |
 | Weekdays 20:00 IST | `screener screen` |
+| Weekdays 20:15 IST | `screener sync --source announcements` |
+| Daily 21:00 IST | `screener sync --source fundamentals --max-days 25` (staleness gate) |
 | Every 6 hours | `screener sync --source fundamentals --retry-queue --max-days 50` |
+| Weekly | `screener sync --source documents` |
 
 Prices are gated on publication time, so 19:30 is the earliest a same-day
-bhavcopy can be relied on.
+bhavcopy can be relied on. Index closes publish on the same schedule and reuse
+the equity trading calendar, so a known holiday is never probed twice.
+
+The fundamentals refresh and the retry drain are separate on purpose: the first
+is the routine staleness-gated trickle (~25 pages/day), the second works the
+quarantine backlog. Running the refresh without the gate is what caused the
+original throttle.
 
 ## Backfilling
 
@@ -125,24 +135,38 @@ timeout returns them to `pending` on the next drain.
 
 ## The price-basis cutover
 
-The technical layer currently runs on `yahoo_adjclose`. Moving to `split_bonus`
-(bhavcopy, price return) is deliberate and has a precondition:
+The technical layer runs on `yahoo_adjclose`. Moving to `split_bonus` (bhavcopy,
+price return) is now **mechanically possible** — NSE's `ind_close_all_<date>.csv`
+supplies price-return series for all twelve benchmark indices, which was the
+blocker — but the evidence does not yet justify it. See
+[decisions.md F20](decisions.md) for the measurement.
 
-**The benchmark indices exist only on the Yahoo basis.** Bhavcopy carries no index
-series, and relative strength divides a stock by a benchmark — both must be on
-the same basis. A price-return run needs price-return index series first;
-`load_all_weekly` raises `BasisIncoherent` rather than producing biased RS.
+In short: the stage flips are not explained by the basis change (the flipped
+names have a *median dividend yield of zero*), and bhavcopy history runs 157
+weeks against Yahoo's 261 — uncomfortably tight against the 130-week base
+lookback. Two things should be true before switching:
 
-When those exist:
+1. **Bhavcopy backfilled to five years**, so the lookback is not the binding
+   constraint.
+2. **The 344 non-reconciling securities resolved.** On the Yahoo basis they fall
+   back; on the price-return basis there is no fallback, so they are excluded
+   outright rather than served a series already known to be wrong.
 
-1. Confirm reconciliation is healthy (`derive --what reconcile`).
-2. Set `SCREENER_PRICE_BASIS=split_bonus`.
-3. Run `screener screen --force` and diff the stage assignments against the
-   previous run.
-4. Every flip should be explicable by the total-return-versus-price-return
-   difference. Anything else is a missing corporate action.
+To evaluate a cutover:
 
-Never flip securities and benchmarks in separate runs.
+```bash
+screener derive --what reconcile          # confirm reconciliation is healthy
+SCREENER_PRICE_BASIS=split_bonus screener screen --force
+screener runs diff <previous_run> <new_run>
+```
+
+Read the diff before adopting it. A flip should be explicable by the
+total-return-versus-price-return difference — which means it should correlate
+with dividend yield. If it does not, something else is moving and the cause needs
+finding first.
+
+Never flip securities and benchmarks in separate runs; `load_all_weekly` raises
+`BasisIncoherent` rather than producing biased relative strength.
 
 ## Testing
 

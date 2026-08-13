@@ -212,6 +212,21 @@ def _cmd_sync(args) -> int:
             db, backfill_days=args.backfill, max_days=args.max_days,
             force=args.force)
 
+    if args.source in ("documents", "all"):
+        from .ingest import document_sync
+        results["documents"] = document_sync.sync(st, db, limit=args.max_days)
+
+    if args.source in ("announcements", "all"):
+        from .ingest import announcement_sync
+        results["announcements"] = announcement_sync.sync(
+            db, backfill_days=args.backfill, max_windows=args.max_days)
+
+    if args.source in ("indices", "all"):
+        from .ingest import index_sync
+        results["indices"] = index_sync.sync(
+            db, backfill_days=args.backfill, max_days=args.max_days,
+            force=args.force)
+
     if args.source in ("shares", "all"):
         from .ingest import shares_sync
         results["shares"] = shares_sync.sync(
@@ -223,7 +238,8 @@ def _cmd_sync(args) -> int:
             results["fundamentals_retry"] = fundamentals_sync.drain_retry_queue(
                 st, db, limit=args.max_days or 25)
         else:
-            print("fundamentals: use --retry-queue to drain quarantined pages")
+            results["fundamentals_refresh"] = fundamentals_sync.refresh_stale(
+                st, db, limit=args.max_days or 25)
 
     print("\nsync summary")
     for name, info in results.items():
@@ -289,6 +305,104 @@ def _cmd_screen(args) -> int:
     return 0 if out["status"] == "complete" else 1
 
 
+def _cmd_runs(args) -> int:
+    from .pipeline import runs as runs_mod
+
+    st, db = _open_db(args)
+    if db is None:
+        return 1
+
+    if args.runs_command == "list":
+        rows = runs_mod.list_runs(db, args.limit)
+        if not rows:
+            print("no runs recorded")
+            return 0
+        print(f"{'run_id':<28} {'status':<10} {'as_of':<12} "
+              f"{'eval':>6} {'elig':>6} {'sel':>5} {'qc!':>4}  started")
+        for r in rows:
+            print(f"{r['run_id']:<28} {r['status']:<10} {str(r['as_of_date']):<12} "
+                  f"{r['evaluated'] or 0:>6} {r['eligible'] or 0:>6} "
+                  f"{r['selected'] or 0:>5} {r['qc_failed']:>4}  "
+                  f"{r['started_at']:%Y-%m-%d %H:%M}")
+        return 0
+
+    if args.runs_command == "show":
+        info = runs_mod.show_run(db, args.run_id)
+        if not info:
+            print(f"no such run: {args.run_id}")
+            return 1
+        r = info["run"]
+        print(f"run {r['run_id']}  [{r['status']}]")
+        print(f"  as_of {r['as_of_date']}   basis via config_hash {r['config_hash']}")
+        print(f"  counts {r['counts']}")
+        print("\nstages")
+        for s in info["stages"]:
+            extra = s["skip_reason"] or s["error"] or ""
+            print(f"  {s['stage']:<22} {s['status']:<9} "
+                  f"{str(s['seconds'] or '-'):>5}s  out={s['rows_out'] or '-':<7} {extra}")
+        print("\nartifacts")
+        for a in info["artifacts"]:
+            print(f"  {a['artifact_name']:<28} rows={str(a['row_count'] or '-'):>7} "
+                  f"{a['bytes']:>9,}B  {a['sha']}")
+        failed = [q for q in info["qc"] if not q["passed"]]
+        print(f"\nqc: {len(info['qc']) - len(failed)}/{len(info['qc'])} passed")
+        for q in failed:
+            print(f"  FAIL {q['check_id']} {q['check_name']} - {q['detail']}")
+        print("\neligible by archetype")
+        for a in info["archetypes"]:
+            print(f"  {str(a['primary_archetype']):<38} {a['n']:>5}")
+        return 0
+
+    if args.runs_command == "diff":
+        d = runs_mod.diff_runs(db, args.base, args.other)
+        if "error" in d:
+            print(d["error"])
+            return 1
+        print(f"diff {d['base']}  ->  {d['other']}\n")
+        u = d["universe"]
+        print(f"universe    in both {u['in_both']}, only base {u['only_in_base']}, "
+              f"only other {u['only_in_other']}")
+        e = d["eligibility"]
+        print(f"eligible    {e['base']} -> {e['other']}  "
+              f"(+{e['gained_count']} / -{e['lost_count']})")
+        c = d["candidates"]
+        print(f"candidates  {c['base']} -> {c['other']}  "
+              f"(entered {c['entered_count']}, left {c['left_count']}, "
+              f"unchanged {c['unchanged']})")
+        if c["entered"]:
+            print(f"  entered: {', '.join(c['entered'][:15])}")
+        if c["left"]:
+            print(f"  left   : {', '.join(c['left'][:15])}")
+        if d["changed_fields"]:
+            print("\nfields changed for companies in both runs")
+            for col, n in sorted(d["changed_fields"].items(), key=lambda x: -x[1]):
+                ex = d["examples"].get(col, [])
+                s = "; ".join(f"{x['symbol']}: {x['from']} -> {x['to']}" for x in ex)
+                print(f"  {col:<32} {n:>5}   {s[:90]}")
+        else:
+            print("\nno field changes for companies present in both runs")
+        return 0
+
+    if args.runs_command == "prune":
+        print(runs_mod.prune_runs(db, args.keep))
+        return 0
+    return 1
+
+
+def _cmd_export_parquet(args) -> int:
+    from .analytics.duck import export_parquet
+
+    st, db = _open_db(args)
+    if db is None:
+        return 1
+    out = export_parquet(st, db.execute)
+    print(f"exported to {st.paths.parquet_dir}")
+    for table, n in out.items():
+        print(f"  {table:<28} {n:>10,} rows")
+    print("\nset SCREENER_ANALYTICS_MODE=parquet to read these instead of Postgres")
+    return 0
+
+
 def _cmd_classify(args) -> int:
     from .ingest import classify_events
 
@@ -348,7 +462,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sy = sub.add_parser("sync", help="incrementally refresh a data source")
     sy.add_argument("--source", default="all",
-                    choices=("all", "prices", "shares", "fundamentals"),
+                    choices=("all", "prices", "indices", "announcements",
+                             "documents", "shares", "fundamentals"),
                     help="which collector to run")
     sy.add_argument("--retry-queue", action="store_true",
                     help="fundamentals: work the quarantined blank-page queue")
@@ -375,6 +490,26 @@ def build_parser() -> argparse.ArgumentParser:
                     help="continue the most recent unfinished run for this as_of")
     sc.add_argument("--stages", help="comma-separated subset of stage names")
     sc.set_defaults(func=_cmd_screen)
+
+    rn = sub.add_parser("runs", help="inspect and compare screening runs")
+    rsub = rn.add_subparsers(dest="runs_command", required=True)
+    rl = rsub.add_parser("list", help="recent runs with their counts")
+    rl.add_argument("--limit", type=int, default=20)
+    rl.set_defaults(func=_cmd_runs)
+    rs = rsub.add_parser("show", help="stages, artifacts and QC for one run")
+    rs.add_argument("run_id")
+    rs.set_defaults(func=_cmd_runs)
+    rd = rsub.add_parser("diff", help="what changed between two runs, and where")
+    rd.add_argument("base")
+    rd.add_argument("other")
+    rd.set_defaults(func=_cmd_runs)
+    rp = rsub.add_parser("prune", help="delete all but the most recent N runs")
+    rp.add_argument("--keep", type=int, default=10)
+    rp.set_defaults(func=_cmd_runs)
+
+    ep = sub.add_parser("export-parquet",
+                        help="materialise the source tables for offline analytics")
+    ep.set_defaults(func=_cmd_export_parquet)
 
     cl = sub.add_parser("classify-events",
                         help="classify stored announcements (v1 and v2 taxonomies)")
