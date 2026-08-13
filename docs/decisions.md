@@ -255,6 +255,53 @@ What the work did buy: the blocker is gone, both bases now run to five years,
 bhavcopy covers more securities than Yahoo, and the guard below exists because
 of it.
 
+### F23 — `disagree` was also measuring dividend yield, and the cutover verdict reversed
+
+Correcting F22 changed the source election enough to be worth re-running the
+cutover comparison. It exposed the same class of error in the other verdict.
+
+The distrust guard demoted both `missed_action` and `disagree`. Broken out, the
+verdicts separate cleanly — and not by data quality:
+
+| verdict | n | median div yield | series diff | shows a ≥10% step |
+|---|---:|---:|---:|---|
+| agree | 1,747 | 0.13% | 1.2% | — |
+| **disagree** | 115 | **1.69%** | 5.6% | **0 of 115** |
+| drift | 57 | 1.97% | 6.4% | — |
+| missed_action | 35 | 0.00% | 21.8% | yes, on a clean ratio |
+
+`disagree` is dividend yield. PTC at 12.9%, Coal India 5.2%, Wipro 6.0%. Not one
+of the 115 shows a step any corporate action would produce — they simply diverge
+gradually, which is precisely what a total-return series does against a
+price-return one. Their bhavcopy history is sound; it is the *comparison* that
+differs, by construction.
+
+Demoting them discarded 81 good exchange-sourced histories, and on the
+price-return basis excluded those companies from the screen entirely — which is
+what made the cutover look expensive.
+
+**With only `missed_action` demoted, the cutover verdict reverses:**
+
+| | yahoo_adjclose | split_bonus |
+|---|---:|---:|
+| Securities receiving a stage | 1,954 | **2,051** |
+| Eligible | 1,106 | 1,092 |
+| Candidates unchanged | — | **146 of 150** |
+| Securities excluded as untrusted | — | 35 |
+
+Progression across the three measurements: 127 of 150 candidates unchanged, then
+132, now 146. Eligibility went from −162 to −14. The price-return basis now has
+*better* technical coverage than Yahoo.
+
+The 117 stage flips are explicable. 53 are coverage differences — one basis has
+40 weeks where the other does not. The rest sit at threshold boundaries, where a
+small cumulative dividend difference tips a moving-average slope across the ±1.5%
+flat band. At the latest bar the two series are identical to 0.0000%.
+
+The default has not been changed; that is a live decision rather than a
+measurement. But the evidence no longer argues against it, and the remaining
+exclusions are 35 demerger-affected securities the parser cannot handle.
+
 ### F21 — On the price-return basis, distrusted series had no fallback
 
 Reconciliation demotes a security whose bhavcopy history fails to reconcile, and

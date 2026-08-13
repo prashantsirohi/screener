@@ -320,17 +320,48 @@ def test_reconciliation_counts_match_the_real_overlap(db):
         f"{row['mismatched']} securities have an inflated weeks_compared"
 
 
-def test_non_reconciling_securities_fall_back_to_yahoo(db):
-    """Reconciliation drives source choice: a history known not to reconcile must
-    not be the one served."""
+def test_securities_with_a_missing_action_fall_back_to_yahoo(db):
+    """
+    Reconciliation drives source choice, but only on real evidence.
+
+    `missed_action` means a price step landing on a ratio a split or bonus
+    produces - the adjustment has demonstrably missed something, so the series is
+    not served.
+    """
     leaked = db.fetch_value("""
         SELECT count(*) AS c
         FROM   market.weekly_bar_resolved wr
         JOIN   market.price_source_reconciliation r
                ON r.security_id = wr.security_id
-        WHERE  r.verdict IN ('missed_action', 'disagree')
+        WHERE  r.verdict = 'missed_action'
           AND  wr.source = 'nse_bhavcopy'
           AND  r.as_of_date = (SELECT max(as_of_date)
                                FROM market.price_source_reconciliation)
     """)
     assert leaked == 0
+
+
+def test_dividend_divergence_does_not_demote_a_good_series(db):
+    """
+    The counterpart, and the more easily got wrong half.
+
+    `disagree` and `drift` mean the two series diverge with no step any corporate
+    action would produce. Measured across the universe that is dividend yield -
+    median 1.69% and 1.97% against 0.13% for agreeing names, and not one of the
+    115 `disagree` securities shows a step above 10%. Yahoo strips dividends and
+    the price-return series does not, so they are *expected* to diverge.
+    Demoting on that basis discarded 81 sound exchange-sourced histories.
+    """
+    demoted = db.fetch_all("""
+        SELECT s.symbol, r.verdict
+        FROM   market.weekly_bar_source_choice c
+        JOIN   market.price_source_reconciliation r ON r.security_id = c.security_id
+        JOIN   market.security s ON s.security_id = c.security_id
+        WHERE  r.as_of_date = (SELECT max(as_of_date)
+                               FROM market.price_source_reconciliation)
+          AND  r.verdict IN ('disagree', 'drift')
+          AND  c.source <> 'nse_bhavcopy'
+        LIMIT  5
+    """)
+    assert not demoted, (
+        f"dividend-driven divergence demoted a sound series: {demoted}")

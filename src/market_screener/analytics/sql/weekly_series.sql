@@ -20,16 +20,21 @@
 -- Parameters: $as_of (date), $adj_basis (text)
 
 WITH distrusted AS (
-    -- Securities whose bhavcopy-derived history failed reconciliation. On the
-    -- Yahoo basis they simply fall back; on the price-return basis there is no
-    -- fallback, because Yahoo is a different basis and mixing is forbidden.
+    -- Securities carrying a corporate action the bhavcopy adjustment is missing.
+    -- On the Yahoo basis they fall back; on the price-return basis there is no
+    -- fallback, so they are excluded - visibly absent beats plausibly wrong.
     --
-    -- Silently using a series we have already concluded is wrong would be worse
-    -- than having no series: the company drops out visibly as
-    -- EX_NO_PRICE_HISTORY instead of carrying a plausible but wrong stage.
+    -- ONLY `missed_action` qualifies. `disagree` and `drift` mean the two series
+    -- diverge without any step a corporate action would produce, and measured
+    -- across the universe that is simply dividend yield: median 1.69% and 1.97%
+    -- against 0.13% for agreeing names, and not one of the 115 `disagree`
+    -- securities shows a step above 10%. Yahoo strips dividends and the
+    -- price-return series does not, so those two are *expected* to diverge -
+    -- excluding them discarded 81 perfectly good histories, Coal India, Wipro
+    -- and ITC-style payers among them.
     SELECT security_id
     FROM   src_price_reconciliation
-    WHERE  verdict IN ('missed_action', 'disagree')
+    WHERE  verdict = 'missed_action'
 ),
 filtered AS (
     SELECT w.*

@@ -188,14 +188,32 @@ supplies price-return series for all twelve benchmark indices, which was the
 blocker — but the evidence does not yet justify it. See
 [decisions.md F20](decisions.md) for the measurement.
 
-Both bases now run to five years, so history length is no longer the issue. The
-remaining blocker is reconciliation: **~306 securities carry corporate actions we
-have not found**, and on the price-return basis there is no Yahoo fallback to
-demote them to, so they are excluded outright. That costs 162 companies from the
-eligible set — 1,106 down to 945.
+Both objections that previously argued against it have been resolved — history
+length (both bases now run to five years) and the size of the trusted universe
+(the verdict was over-flagging, see [decisions.md F22 and F23](decisions.md)).
+The current measurement:
 
-The precondition is therefore to resolve the non-reconciling securities, not to
-collect more history. Progress is visible in:
+| | yahoo_adjclose | split_bonus |
+|---|---:|---:|
+| Securities receiving a stage | 1,954 | **2,051** |
+| Eligible | 1,106 | 1,092 |
+| Candidates unchanged | — | **146 of 150** |
+| Excluded as untrusted | — | 35 |
+
+The price-return basis now has better technical coverage, near-identical
+eligibility, and 97% candidate stability. It is also the analytically correct
+basis for stage analysis — a Weinstein chart is a price chart — and it comes
+from the exchange rather than an aggregator.
+
+The remaining 35 exclusions are **demergers**, which the corporate-actions parser
+skips because splitting value across the resulting entities needs data the feed
+does not carry.
+
+The default has not been switched: that changes what every future run produces
+and is a decision to take deliberately, not a side effect of a measurement. To
+take it, run the comparison below, review the diff, then set the variable.
+
+Progress on the residual is visible in:
 
 ```bash
 screener derive --what reconcile     # verdict counts
