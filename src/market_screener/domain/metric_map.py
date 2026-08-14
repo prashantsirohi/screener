@@ -9,6 +9,8 @@ and not a silently missing metric.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 
 STATEMENTS = {
@@ -62,6 +64,28 @@ LOWER_IS_BETTER = {
     "ratios.working_capital_days", "ratios.cash_conversion_cycle",
     "profit_loss.interest",
 }
+
+def mapping_version() -> str:
+    """
+    Fingerprint of the tables that decide how a source label becomes a metric.
+
+    DERIVED rather than hand-maintained, unlike `metrics.MODEL_VERSION`. These
+    are pure data whose content fully determines the mapping, so a hash is exact
+    and cannot be forgotten; hashing the metrics module instead would fire on a
+    comment edit. The two versions answer different questions - this one is "did
+    we change how labels map", that one is "did we change the arithmetic".
+
+    It is what separates the aggregator renaming a row from us re-aliasing one:
+    a label change under an unchanged mapping_version is THEIR doing.
+    """
+    blob = json.dumps({
+        "aliases": LABEL_ALIASES,
+        "units": UNIT_OVERRIDES,
+        "higher": sorted(HIGHER_IS_BETTER),
+        "lower": sorted(LOWER_IS_BETTER),
+    }, sort_keys=True).encode()
+    return hashlib.sha256(blob).hexdigest()[:12]
+
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 

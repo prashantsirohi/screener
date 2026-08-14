@@ -224,6 +224,22 @@ def run(ctx: RunContext) -> StageResult:
       "`liquidity_value_inr_cr` are in crore (1 cr = 10,000,000). Prices are per "
       "share. `_pct` fields are percentages, not fractions. `net_debt_to_equity` "
       "and `cfo_pat_ratio` are ratios. Dates are `YYYY-MM-DD`.\n")
+
+    A("### Two column names claim more than the data supports\n")
+    A("These headers are frozen because Phase 2 consumes them, so they are "
+      "documented rather than renamed. Internally the system calls them by "
+      "what they are.\n")
+    A("| Column | What it actually is |")
+    A("|---|---|")
+    A("| `net_debt_to_equity` | **Gross** borrowings / equity. The aggregator "
+      "does not report cash separately, so leverage is overstated for cash-rich "
+      "companies. Internally `gross_debt_to_equity`. |")
+    A("| `normalized_eps_cagr_5y_pct` | **Reported** EPS CAGR, exceptional items "
+      "included. Nothing is normalised; that needs the filings and is Phase 2 "
+      "work. Internally `reported_eps_cagr_5y_pct`. |")
+    A("| `cfo_pat_ratio` | Cumulative CFO over **reported** PAT, exceptional "
+      "items included. |")
+    A("")
     A("---")
     A("*Analytical research output produced by an automated screen. Not "
       "personalised investment advice.*")

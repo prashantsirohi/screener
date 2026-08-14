@@ -34,6 +34,8 @@ from market_screener.domain.eligibility import assess, data_quality
 from market_screener.domain.scoring import score_priority
 from market_screener.ingest import classify_events
 
+from ._renames import translate
+
 from ._bars import last_complete_week, truncate_to_complete_weeks
 
 pytestmark = pytest.mark.parity
@@ -220,7 +222,11 @@ def test_priority_scores_match(db, labels, yahoo_frames, golden,
             legacy_wein.load_bars(PRICE_CACHE / f"{row['symbol']}.json"),
             last_complete_week(pframe)))
 
-        ws, wb = score_priority(lm, lt, wfit, liq_l)
+        # Both bundles go through the SAME (ported) scorer, so the metrics are
+        # what is being compared. That means the oracle's bundle has to be keyed
+        # the way the port keys it, or the scorer reads None for the renamed
+        # fields and invents a difference that is not there.
+        ws, wb = score_priority(translate(lm), lt, wfit, liq_l)
         gs, gb = score_priority(pm, pt, gfit, liq_p)
         if abs(ws - gs) > 1e-6:
             diffs.append(f"{row['symbol']}: {ws} -> {gs} (components {wb} vs {gb})")

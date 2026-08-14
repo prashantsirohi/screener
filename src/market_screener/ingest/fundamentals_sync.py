@@ -17,10 +17,13 @@ symbol, and the queue lives in Postgres so a crash or reboot loses nothing.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
 import logging
 import random
 import time
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -121,8 +124,50 @@ def release(db: Database, retry_id: int, *, resolved: bool,
         (nxt, delay, (error or "")[:2000], retry_id))
 
 
-def _fetch(client, symbol: str, attempt: int) -> tuple[dict | None, str | None]:
-    """Return (payload, error). Later attempts try the standalone page first."""
+# Stamped on every page captured, so a re-parse can be scoped to the pages a
+# given parser produced. Bump when screener_parse changes in a way that could
+# alter what it extracts.
+PARSER_VERSION = "v1"
+
+
+@dataclass
+class RawPage:
+    """
+    The response as received, kept alongside whatever the parser made of it.
+
+    The parsed dict is a derived view. Retaining only that meant a parser defect
+    could never be truly repaired: `rebuild-facts` replays the fact explosion
+    over stored payloads, but the information a broken parser dropped was
+    already gone. This is the layer that makes a re-parse possible.
+    """
+    body: str
+    sha256: str
+    n_bytes: int
+    status: int | None
+    content_type: str | None
+    final_url: str
+
+    @classmethod
+    def from_response(cls, resp) -> "RawPage":
+        body = resp.text or ""
+        encoded = body.encode("utf-8", "replace")
+        return cls(
+            body=body,
+            sha256=hashlib.sha256(encoded).hexdigest(),
+            n_bytes=len(encoded),
+            status=getattr(resp, "status_code", None),
+            content_type=(getattr(resp, "headers", {}) or {}).get("Content-Type"),
+            final_url=resp.url)
+
+    def gzipped(self) -> bytes:
+        # mtime=0 so identical HTML compresses to identical bytes; otherwise the
+        # gzip header timestamp makes every capture look different on disk.
+        return gzip.compress(self.body.encode("utf-8", "replace"), mtime=0)
+
+
+def _fetch(client, symbol: str, attempt: int
+           ) -> tuple[dict | None, RawPage | None, str | None]:
+    """Return (payload, raw, error). Later attempts try the standalone page first."""
     order = ["consolidated", ""] if attempt < 4 else ["", "consolidated"]
     last_err = None
     for basis in order:
@@ -138,18 +183,20 @@ def _fetch(client, symbol: str, attempt: int) -> tuple[dict | None, str | None]:
         if "/register/" in resp.url or "/login/" in resp.url:
             last_err = "gated"
             continue
+        raw = RawPage.from_response(resp)
         rec = parse_company_page(resp.text, symbol, resp.url,
                                  "consolidated" if "consolidated" in resp.url else "standalone")
         blank, reason = is_blank_payload(rec)
         if not blank:
-            return rec, None
+            return rec, raw, None
         last_err = f"blank:{reason}"
         if not blank_reason_is_retryable(reason):
-            return None, last_err
-    return None, last_err
+            return None, raw, last_err
+    return None, None, last_err
 
 
-def _store(db: Database, symbol: str, rec: dict, batch: str) -> int:
+def _store(db: Database, symbol: str, rec: dict, batch: str,
+           raw: RawPage | None = None) -> int:
     sid = db.fetch_value(
         "SELECT security_id FROM market.security WHERE symbol=%s AND exchange='NSE'",
         (symbol,))
@@ -214,10 +261,20 @@ def _store(db: Database, symbol: str, rec: dict, batch: str) -> int:
         cur.execute("""
             INSERT INTO market.screener_page_raw
                 (security_id, basis, source_url, fetched_at, payload, payload_hash,
-                 is_blank, blank_reason, parser_version)
-            VALUES (%s,%s,%s,%s,%s, md5(%s), false, NULL, 'v1')
+                 is_blank, blank_reason, parser_version,
+                 raw_html, raw_sha256, raw_bytes, http_status, content_type,
+                 final_url)
+            VALUES (%s,%s,%s,%s,%s, md5(%s), false, NULL, %s,
+                    %s,%s,%s,%s,%s,%s)
             ON CONFLICT (security_id, basis, fetched_at) DO NOTHING
-        """, (sid, basis, rec.get("source_url"), fetched_at, payload, payload))
+        """, (sid, basis, rec.get("source_url"), fetched_at, payload, payload,
+              PARSER_VERSION,
+              raw.gzipped() if raw else None,
+              raw.sha256 if raw else None,
+              raw.n_bytes if raw else None,
+              raw.status if raw else None,
+              raw.content_type if raw else None,
+              raw.final_url if raw else None))
 
         create_staging(cur, "f_in", {
             "security_id": "bigint", "period_type": "text", "report_date": "date",
@@ -310,9 +367,9 @@ def refresh_stale(settings: Settings, db: Database, *, limit: int = 25,
     ok = blank = failed = 0
     facts = 0
     for i, t in enumerate(targets, 1):
-        rec, err = _fetch(client, t["symbol"], attempt=1)
+        rec, raw, err = _fetch(client, t["symbol"], attempt=1)
         if rec is not None:
-            facts += _store(db, t["symbol"], rec, bid)
+            facts += _store(db, t["symbol"], rec, bid, raw)
             ok += 1
         elif err and err.startswith("blank"):
             # Quarantine and queue rather than dropping the company.
@@ -350,6 +407,92 @@ def refresh_stale(settings: Settings, db: Database, *, limit: int = 25,
     set_watermark(db, SOURCE, "refresh", str(as_of or date.today()), rows=facts)
     return {"targets": len(targets), "refreshed": ok, "blank_quarantined": blank,
             "failed": failed, "facts_written": facts, "still_stale": remaining}
+
+
+def reparse_pages_from_html(db: Database, *, limit: int | None = None,
+                            dry_run: bool = False) -> dict:
+    """
+    Re-run the parser over retained HTML and refresh the derived payload.
+
+    This is the step `rebuild-facts` could never perform. That replays the fact
+    EXPLOSION over a stored payload, which fixes a mapping bug but is powerless
+    against a parsing one: whatever the parser failed to extract was never in the
+    payload to begin with. Re-parsing needs the response, which is why 0017
+    retains it.
+
+    Run this first, then `rebuild-facts`, to propagate a parser fix end to end
+    without re-fetching anything.
+
+    Pages captured before 0017 have no HTML and are reported as unreplayable
+    rather than skipped silently - the distinction between "checked and
+    unchanged" and "could not be checked" is the entire point.
+    """
+    rows = db.fetch_all(f"""
+        SELECT DISTINCT ON (security_id, basis)
+               page_id, security_id, basis, source_url, payload,
+               raw_html, raw_sha256
+        FROM   market.screener_page_raw
+        WHERE  raw_html IS NOT NULL
+        ORDER  BY security_id, basis, fetched_at DESC
+        {"LIMIT %s" if limit else ""}
+    """, (limit,) if limit else None)
+
+    unreplayable = db.fetch_value("""
+        SELECT count(*) AS c FROM (
+            SELECT DISTINCT ON (security_id, basis) raw_html
+            FROM   market.screener_page_raw
+            ORDER  BY security_id, basis, fetched_at DESC
+        ) x WHERE raw_html IS NULL
+    """)
+
+    out = {"replayable": len(rows), "unreplayable": unreplayable,
+           "changed": 0, "unchanged": 0, "corrupt": 0, "failed": 0}
+    if not rows:
+        return out
+
+    symbols = {r["security_id"]: r["symbol"] for r in db.fetch_all(
+        "SELECT security_id, symbol FROM market.security")}
+
+    for p in rows:
+        body = gzip.decompress(bytes(p["raw_html"])).decode("utf-8", "replace")
+
+        # The checksum is over the uncompressed body, so this verifies the round
+        # trip through storage. A silent mismatch would let a corrupted capture
+        # be re-parsed into plausible-looking facts.
+        digest = hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()
+        if p["raw_sha256"] and digest != p["raw_sha256"]:
+            log.error("page %s: stored HTML fails its checksum, skipping",
+                      p["page_id"])
+            out["corrupt"] += 1
+            continue
+
+        try:
+            rec = parse_company_page(
+                body, symbols.get(p["security_id"], ""), p["source_url"],
+                p["basis"])
+        except Exception as exc:                       # noqa: BLE001
+            log.error("page %s: re-parse failed: %s", p["page_id"], exc)
+            out["failed"] += 1
+            continue
+
+        before = p["payload"]
+        if isinstance(before, str):
+            before = json.loads(before)
+        if rec == before:
+            out["unchanged"] += 1
+            continue
+
+        out["changed"] += 1
+        if dry_run:
+            continue
+        payload = json.dumps(rec, ensure_ascii=False)
+        db.execute("""
+            UPDATE market.screener_page_raw
+            SET    payload = %s, payload_hash = md5(%s), parser_version = %s
+            WHERE  page_id = %s
+        """, (payload, payload, PARSER_VERSION, p["page_id"]))
+
+    return out
 
 
 def rebuild_facts_from_payloads(db: Database, *, batch_size: int = 200) -> dict:
@@ -485,9 +628,9 @@ def drain_retry_queue(settings: Settings, db: Database, *, limit: int = 25,
         client.reset_session(rotate_user_agent=attempt >= 3)
         client.warmup(force=True)
 
-        rec, err = _fetch(client, r["symbol"], attempt)
+        rec, raw, err = _fetch(client, r["symbol"], attempt)
         if rec is not None:
-            facts_written += _store(db, r["symbol"], rec, bid)
+            facts_written += _store(db, r["symbol"], rec, bid, raw)
             release(db, r["retry_id"], resolved=True, attempts=attempt)
             recovered += 1
             log.info("recovered %s on attempt %d", r["symbol"], attempt + 1)

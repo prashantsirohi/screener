@@ -40,7 +40,7 @@ the queue, and each run records whether the floor or the target bound it.
 
 ## Current state
 
-Phase 1 is complete and passes **333 tests**. Phases 2 (forensic validation and
+Phase 1 is complete and passes **368 tests**. Phases 2 (forensic validation and
 valuation) and 3 (technical confirmation and portfolio construction) are not
 built; the schema and point-in-time design do not preclude them.
 
@@ -106,7 +106,9 @@ depth at any point.
 | `sync --source {prices,indices,announcements,documents,fundamentals,shares}` | Incremental refresh. `--backfill N`, `--max-days N`, `--force`, `--retry-queue` |
 | `derive --what {actions,actions-divergence,adjusted,weekly,reconcile,all}` | Rebuild corporate actions, adjusted prices, weekly bars, source reconciliation |
 | `classify-events [--diff]` | Classify announcements under both taxonomy versions |
-| `rebuild-facts` | Re-explode facts from retained page payloads after a parser fix — no re-fetching |
+| `reparse-pages [--dry-run] [--limit]` | Re-run the parser over retained raw HTML, checksum-verified. Replays a **parser** fix |
+| `rebuild-facts` | Re-explode facts from retained payloads. Replays a **mapping** fix |
+| `metrics [--snapshot] [--strict]` | Metric-label drift: renames, vanished rows, unit changes, coverage collapses |
 | `screen [--as-of] [--force] [--resume] [--stages]` | Run Phase 1 and emit the hand-off |
 | `runs list \| show <id> \| diff <a> <b> \| prune` | Inspect and compare runs |
 | `export-parquet` | Materialise the source tables for the offline analytics mode |
@@ -153,8 +155,12 @@ moving average spanning the seam. The default is `split_bonus` — exchange-sour
 price return, which is the correct basis for stage analysis since a Weinstein
 chart is a price chart.
 
-**Raw payloads are retained.** A parser fix can be replayed over every page
-already collected (`rebuild-facts`) without re-fetching anything.
+**Pages are retained, not just parses.** The gzipped response body is kept with
+its SHA-256 and HTTP metadata, so `reparse-pages` can re-run the parser over
+everything already collected and `rebuild-facts` can then re-explode the facts —
+no re-fetching. Retention is forward-only from migration 0017; pages captured
+before it have their parsed payload but not their HTML, and are re-captured by
+the staleness gate.
 
 See [docs/architecture.md](docs/architecture.md) for the schema and stage
 pipeline, and [docs/decisions.md](docs/decisions.md) for why each of these was
@@ -205,7 +211,11 @@ Stated plainly, because they bound what the output supports:
 - **No normalisation of exceptional items.** Reported EPS and PAT only; names
   where other income exceeds 35% of PBT carry an explicit flag.
 - **Net debt is gross borrowings.** Cash is not separately available, so leverage
-  is overstated for cash-rich companies.
+  is overstated for cash-rich companies. Internally the field is
+  `gross_debt_to_equity`; the CSV column is still `net_debt_to_equity` because
+  the 37-column contract is frozen. Likewise `normalized_eps_cagr_5y_pct` is
+  **reported** EPS — nothing is normalised. Both are named in the summary's data
+  dictionary.
 - **Promoter pledging, auditor qualifications, related-party transactions and
   CWIP ageing are not assessed.** All need the annual report.
 - **Capex evidence is balance-sheet inference**, not verified commissioning.

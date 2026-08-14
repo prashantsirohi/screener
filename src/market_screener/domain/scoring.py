@@ -33,7 +33,7 @@ def score_priority(m: dict, tech: dict, fit: float, liq: float | None) -> tuple[
     else:
         cp = m.get("cfo_pat_5y") or m.get("cfo_pat_3y")
         q += min(7, max(0, ((cp or 0) - 0.3) / 0.7 * 7))
-        de = m.get("net_debt_to_equity")
+        de = m.get("gross_debt_to_equity")
         q += 6 if (de is not None and de < 0.4) else (4 if (de is not None and de < 1.0)
                                                      else (2 if (de is not None and de < 1.8) else 0))
         ic = m.get("interest_cover_x")
@@ -58,8 +58,9 @@ def score_priority(m: dict, tech: dict, fit: float, liq: float | None) -> tuple[
     # --- Preliminary valuation plausibility: 15 ---
     v = 0.0
     pe = m.get("stock_pe")
-    growth = max([x for x in (m.get("eps_cagr_3y_pct"), m.get("eps_cagr_5y_pct")) if x is not None],
-                 default=None)
+    growth = max([x for x in (m.get("reported_eps_cagr_3y_pct"),
+                              m.get("reported_eps_cagr_5y_pct"))
+                  if x is not None], default=None)
     if pe is not None and pe > 0:
         if growth and growth > 0:
             peg = pe / growth

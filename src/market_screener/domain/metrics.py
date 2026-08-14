@@ -28,6 +28,26 @@ import numpy as np
 # hashing the source would invalidate the cache on a comment edit.
 MODEL_VERSION = "1"
 
+# Internal metric name -> the frozen CSV column it is written as.
+#
+# Three names in this bundle claimed more than the data supports:
+# `net_debt_to_equity` was gross borrowings over equity because the aggregator
+# does not expose cash, and `normalized_eps_cagr_5y_pct` is reported EPS,
+# exceptional items included. The internal names are now honest.
+#
+# The CSV headers are NOT renamed. They are a frozen 37-column contract that
+# Phase 2 consumes and the parity baseline asserts, so the fix would break two
+# things to correct a label. The mapping is applied once, on write, and this
+# dict is the only place the old names survive.
+#
+# `normalized_eps_cagr_5y_pct` therefore remains a column header that misstates
+# its contents. That is a deliberate trade of accuracy for contract stability,
+# and it is called out in the data dictionary rather than left to be discovered.
+LEGACY_CSV_NAMES = {
+    "gross_debt_to_equity": "net_debt_to_equity",
+    "reported_eps_cagr_5y_pct": "normalized_eps_cagr_5y_pct",
+}
+
 FY_RE = re.compile(r"^(Mar|Jun|Sep|Dec)\s+(\d{4})$")
 
 
@@ -143,10 +163,14 @@ def compute(rec: dict, industry: str | None = None) -> dict:
         out["revenue_cagr_5y_pct"] = cagr(rvals[-6], rvals[-1], 5)
     if len(rvals) >= 4:
         out["revenue_cagr_3y_pct"] = cagr(rvals[-4], rvals[-1], 3)
+    # REPORTED EPS, including exceptional items. True normalisation needs the
+    # filings, which is Phase 2 work; the frozen CSV column is still called
+    # `normalized_eps_cagr_5y_pct`, which is the one contract name that
+    # misstates its contents. See LEGACY_CSV_NAMES.
     if len(evals) >= 6:
-        out["eps_cagr_5y_pct"] = cagr(evals[-6], evals[-1], 5)
+        out["reported_eps_cagr_5y_pct"] = cagr(evals[-6], evals[-1], 5)
     if len(evals) >= 4:
-        out["eps_cagr_3y_pct"] = cagr(evals[-4], evals[-1], 3)
+        out["reported_eps_cagr_3y_pct"] = cagr(evals[-4], evals[-1], 3)
 
     # screener's own compounded growth tables (cross-check)
     out["screener_sales_cagr_5y"] = (gr.get("Compounded Sales Growth") or {}).get("5 Years")
@@ -183,12 +207,13 @@ def compute(rec: dict, industry: str | None = None) -> dict:
     out["total_assets_inr_cr"] = totassets[-1] if totassets else None
 
     if not fin:
-        out["debt_to_equity"] = safe_div(out["borrowings_inr_cr"], equity)
-        # screener does not expose cash separately; borrowings/equity is the usable proxy
-        out["net_debt_to_equity"] = out["debt_to_equity"]
+        # GROSS, not net. The aggregator does not expose cash separately, so
+        # this is borrowings/equity and leverage is overstated for cash-rich
+        # companies. It was called `net_debt_to_equity` for both keys, which
+        # named a number the system has never had - see LEGACY_CSV_NAMES.
+        out["gross_debt_to_equity"] = safe_div(out["borrowings_inr_cr"], equity)
     else:
-        out["debt_to_equity"] = None
-        out["net_debt_to_equity"] = None
+        out["gross_debt_to_equity"] = None
 
     # CWIP intensity - a capex-commissioning tell
     out["cwip_to_gross_block_pct"] = (

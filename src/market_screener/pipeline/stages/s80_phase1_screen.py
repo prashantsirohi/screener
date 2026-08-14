@@ -237,10 +237,13 @@ def run(ctx: RunContext) -> StageResult:
             cls.get("classification_rationale") or "",
             "|".join(tags),
             tech.get("technical_stage"), tech.get("technical_data_date"),
-            m.get("revenue_cagr_5y_pct"), m.get("eps_cagr_5y_pct"),
+            # The two renamed metrics are written under their frozen CSV
+            # headers, which metrics.LEGACY_CSV_NAMES documents. This is the
+            # single place the old names are applied.
+            m.get("revenue_cagr_5y_pct"), m.get("reported_eps_cagr_5y_pct"),
             m.get("roe_latest_pct") if fin else m.get("roce_latest_pct"),
             m.get("screener_roe_5y") if fin else m.get("roce_median_5y_pct"),
-            m.get("net_debt_to_equity"), m.get("cfo_pat_period") or "",
+            m.get("gross_debt_to_equity"), m.get("cfo_pat_period") or "",
             m.get("cfo_pat_5y") if not fin else None,
             ("P/B vs ROE (preliminary)" if fin
              else "Trailing P/E vs 3-5y EPS CAGR (preliminary)"),

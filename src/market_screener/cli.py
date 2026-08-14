@@ -168,6 +168,26 @@ def _cmd_status(args) -> int:
         blanks = db.fetch_value(
             "SELECT count(*) AS c FROM market.screener_page_raw WHERE is_blank")
         print(f"  blank pages quarantined: {blanks}")
+
+        # Raw-HTML retention is forward-only, so this climbs as the staleness
+        # gate re-captures the corpus. It is reported rather than alerted on:
+        # low coverage early is expected, not a fault.
+        cap = db.fetch_one("""
+            SELECT count(*) AS pages,
+                   count(*) FILTER (WHERE raw_html IS NOT NULL) AS with_html,
+                   coalesce(sum(length(raw_html)), 0) AS gz_bytes
+            FROM  (SELECT DISTINCT ON (security_id, basis) raw_html
+                   FROM   market.screener_page_raw
+                   ORDER  BY security_id, basis, fetched_at DESC) x
+        """)
+        if cap and cap["pages"]:
+            pct = 100.0 * cap["with_html"] / cap["pages"]
+            print(f"\nreplayable pages (raw HTML retained)")
+            print(f"  {cap['with_html']:,} of {cap['pages']:,}  ({pct:.1f}%), "
+                  f"{cap['gz_bytes'] / 1e6:.1f} MB gzipped")
+            if pct < 100:
+                print("  the rest predate migration 0017 and re-capture "
+                      "at ~25/day via the staleness gate")
     except Exception:
         pass
 
@@ -501,6 +521,83 @@ def _cmd_rebuild_facts(args) -> int:
     return 0
 
 
+def _cmd_metrics(args) -> int:
+    from .ingest import metric_drift
+
+    st, db = _open_db(args)
+    if db is None:
+        return 1
+
+    if args.snapshot:
+        out = metric_drift.snapshot(db)
+        print(f"recorded {out['metrics']} metrics at {out['snapshot_at']} "
+              f"(mapping {out.get('mapping_version')})")
+        return 0
+
+    rep = metric_drift.drift(db)
+    if rep["status"] != "ok":
+        print(f"need two snapshots to compare; have {rep['snapshots']}.")
+        print("  screener metrics --snapshot")
+        return 0
+
+    prev, now = rep["compared"]
+    print(f"metric drift  {prev:%Y-%m-%d %H:%M} -> {now:%Y-%m-%d %H:%M}")
+    if rep["mapping_changed_by_us"]:
+        print("  NOTE: mapping_version differs between the snapshots, so some "
+              "of this is our own change, not the source's.")
+
+    if rep["likely_renames"]:
+        print("\n  likely renames (a label moved, coverage held)")
+        for r in rep["likely_renames"]:
+            print(f"    {r['from_label']!r} -> {r['to_label']!r}  "
+                  f"({r['securities']} companies)")
+    for key, title in (("vanished", "vanished - these metrics now read as absent"),
+                       ("appeared", "appeared"),
+                       ("unit_changed", "unit changed"),
+                       ("coverage_drop", "coverage dropped")):
+        if not rep[key]:
+            continue
+        print(f"\n  {title}")
+        for r in rep[key][:12]:
+            if key == "unit_changed":
+                print(f"    {r['label']:<40} {r['was']} -> {r['now']}")
+            elif key == "coverage_drop":
+                print(f"    {r['label']:<40} {r['was']:,} -> {r['now']:,} "
+                      f"(-{r['drop_pct']}%)")
+            else:
+                print(f"    {r['metric_label']:<40} {r['securities']:,} companies")
+
+    if not metric_drift.has_findings(rep):
+        print("  no drift")
+    elif args.strict:
+        return 1
+    return 0
+
+
+def _cmd_reparse_pages(args) -> int:
+    from .ingest import fundamentals_sync
+
+    st, db = _open_db(args)
+    if db is None:
+        return 1
+    out = fundamentals_sync.reparse_pages_from_html(
+        db, limit=args.limit, dry_run=args.dry_run)
+    print("\nre-parse summary" + ("  (dry run)" if args.dry_run else ""))
+    for k, v in out.items():
+        print(f"  {k:<14} {v:>7,}")
+    if out["unreplayable"]:
+        print(f"\n  {out['unreplayable']:,} page(s) predate raw-HTML retention "
+              f"(migration 0017) and cannot be re-parsed.")
+        print("  They are re-captured by the staleness gate at ~25/day:")
+        print("    screener sync --source fundamentals --max-days 45")
+    if out["corrupt"]:
+        print(f"\n  WARNING: {out['corrupt']} page(s) failed their checksum.")
+    if out["changed"] and not args.dry_run:
+        print("\n  Payloads changed. Re-explode the facts:")
+        print("    screener rebuild-facts")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="screener",
                                 description="Persistent Indian-equity screening system")
@@ -584,8 +681,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     rf = sub.add_parser("rebuild-facts",
                         help="re-explode facts from retained page payloads "
-                             "(replays a parser fix without re-fetching)")
+                             "(replays a MAPPING fix; cannot replay a parse)")
     rf.set_defaults(func=_cmd_rebuild_facts)
+
+    mt = sub.add_parser("metrics",
+                        help="metric-label drift: renames, vanished rows, "
+                             "unit changes, coverage collapses")
+    mt.add_argument("--snapshot", action="store_true",
+                    help="record the current metric coverage")
+    mt.add_argument("--strict", action="store_true",
+                    help="exit non-zero if any drift is found")
+    mt.set_defaults(func=_cmd_metrics)
+
+    rp = sub.add_parser("reparse-pages",
+                        help="re-run the parser over retained raw HTML "
+                             "(replays a PARSER fix; follow with rebuild-facts)")
+    rp.add_argument("--limit", type=int, help="only the first N pages")
+    rp.add_argument("--dry-run", action="store_true",
+                    help="report what would change without writing")
+    rp.set_defaults(func=_cmd_reparse_pages)
 
     il = sub.add_parser("import-legacy-cache",
                         help="load the existing data/ JSON caches without re-scraping")

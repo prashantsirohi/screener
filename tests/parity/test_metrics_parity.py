@@ -107,6 +107,10 @@ def _same(a, b) -> bool:
 # what it says.
 PROVENANCE_FIELDS = {"source_url", "basis", "symbol", "company", "industry"}
 
+# The oracle's keys, translated to the port's honest names before comparison -
+# not exempted, because the values must still be identical. See _renames.
+from ._renames import translate as _translate  # noqa: E402
+
 
 def test_golden_set_is_the_expected_size(golden):
     assert len(golden) == GOLDEN_SIZE
@@ -120,7 +124,7 @@ def test_metric_bundles_match_field_for_field(db, labels, golden):
         sym, sid, industry = row["symbol"], row["security_id"], row["nse_industry"]
 
         raw = json.loads((CACHE / f"{sym}.json").read_text(encoding="utf-8"))
-        want = legacy.compute(raw, industry)
+        want = _translate(legacy.compute(raw, industry))
 
         rebuilt = fv.payload_for_metrics(db, sid, labels=labels)
         got = ported.compute(rebuilt, industry)
@@ -141,7 +145,7 @@ def test_metric_bundles_match_field_for_field(db, labels, golden):
 def test_headline_metrics_are_actually_populated(db, labels, golden):
     """Guards against a vacuous pass where both sides return all-None."""
     headline = ["market_cap_inr_cr", "revenue_cagr_5y_pct", "roce_median_5y_pct",
-                "cfo_pat_5y", "promoter_holding_pct", "net_debt_to_equity"]
+                "cfo_pat_5y", "promoter_holding_pct", "gross_debt_to_equity"]
     populated = {k: 0 for k in headline}
     for row in golden:
         got = ported.compute(

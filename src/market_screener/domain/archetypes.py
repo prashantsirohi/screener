@@ -64,11 +64,11 @@ def fit_quality_compounder(m):
     ev = []
     s = 0.0
     s += _pos(m.get("revenue_cagr_5y_pct"), 8, 20, 22)
-    s += _pos(m.get("eps_cagr_5y_pct"), 10, 25, 22)
+    s += _pos(m.get("reported_eps_cagr_5y_pct"), 10, 25, 22)
     s += _pos(m.get("roce_median_5y_pct"), 14, 28, 26)
     cp = m.get("cfo_pat_5y") or m.get("cfo_pat_3y")
     s += _pos(cp, 0.5, 1.0, 15)
-    de = m.get("net_debt_to_equity")
+    de = m.get("gross_debt_to_equity")
     s += 10 if (de is not None and de < 0.5) else (5 if (de is not None and de < 1.0) else 0)
     opm_stab = m.get("opm_median_5y_pct")
     s += _pos(opm_stab, 10, 25, 5)
@@ -76,8 +76,8 @@ def fit_quality_compounder(m):
         ev.append(f"5y median ROCE {m['roce_median_5y_pct']:.0f}%")
     if (m.get("revenue_cagr_5y_pct") or 0) > 12:
         ev.append(f"5y revenue CAGR {m['revenue_cagr_5y_pct']:.0f}%")
-    if (m.get("eps_cagr_5y_pct") or 0) > 15:
-        ev.append(f"5y EPS CAGR {m['eps_cagr_5y_pct']:.0f}%")
+    if (m.get("reported_eps_cagr_5y_pct") or 0) > 15:
+        ev.append(f"5y EPS CAGR {m['reported_eps_cagr_5y_pct']:.0f}%")
     if cp and cp >= 0.8:
         ev.append(f"cumulative CFO/PAT {cp:.2f}")
     # gate: a compounder must actually earn above a rough cost of capital
@@ -99,14 +99,14 @@ def fit_high_growth(m):
     ev = []
     s = 0.0
     r5, r3 = m.get("revenue_cagr_5y_pct"), m.get("revenue_cagr_3y_pct")
-    e5, e3 = m.get("eps_cagr_5y_pct"), m.get("eps_cagr_3y_pct")
+    e5, e3 = m.get("reported_eps_cagr_5y_pct"), m.get("reported_eps_cagr_3y_pct")
     qr = m.get("q_revenue_yoy_pct")
     s += _pos(max([x for x in (r5, r3) if x is not None], default=None), 15, 35, 28)
     s += _pos(max([x for x in (e5, e3) if x is not None], default=None), 18, 45, 26)
     s += _pos(qr, 12, 40, 20)
     cp = m.get("cfo_pat_5y") or m.get("cfo_pat_3y")
     s += _pos(cp, 0.3, 0.9, 12)
-    de = m.get("net_debt_to_equity")
+    de = m.get("gross_debt_to_equity")
     s += 8 if (de is not None and de < 0.8) else 0
     dil = m.get("equity_capital_change_5y_pct")
     s += 6 if (dil is not None and dil < 15) else 0
@@ -156,7 +156,7 @@ def fit_capex_leverage(m):
     if vs_peak is not None and vs_peak < -1:
         s += 12
         ev.append(f"OPM {abs(vs_peak):.1f}pp below 5y peak - absorption yet to come")
-    de = m.get("net_debt_to_equity")
+    de = m.get("gross_debt_to_equity")
     if de is not None:
         s += 10 if de < 1.0 else (4 if de < 1.8 else 0)
         if de > 2.5:
@@ -195,7 +195,7 @@ def fit_cyclical_recovery(m):
     if qp is not None and qp > 10:
         s += _pos(qp, 10, 60, 14)
     # survivability
-    de = m.get("net_debt_to_equity")
+    de = m.get("gross_debt_to_equity")
     ic = m.get("interest_cover_x")
     s += 12 if (de is not None and de < 1.0) else (5 if (de is not None and de < 2.0) else 0)
     if ic is not None and ic < 1.5:
@@ -229,7 +229,7 @@ def fit_turnaround(m):
         ev.append("quarterly profit improving YoY")
     if m.get("q_revenue_yoy_pct") is not None and m["q_revenue_yoy_pct"] > 5:
         s += 12
-    de = m.get("net_debt_to_equity")
+    de = m.get("gross_debt_to_equity")
     if de is not None:
         s += 16 if de < 1.0 else (8 if de < 2.0 else 0)
         if de > 3:
@@ -256,7 +256,7 @@ def fit_asset_value(m):
     ev.append(f"balance-sheet investments = {ratio:.0f}% of market cap")
     if m.get("stock_pe") is not None and m["stock_pe"] < 15:
         s += 12
-    de = m.get("net_debt_to_equity")
+    de = m.get("gross_debt_to_equity")
     s += 15 if (de is not None and de < 0.4) else 0
     bv, px = m.get("book_value_inr"), m.get("current_price_inr")
     if bv and px and px < bv:
@@ -276,13 +276,13 @@ def fit_financial_compounder(m):
     s += _pos(roe, 10, 20, 32)
     s += _pos(m.get("screener_roe_5y"), 10, 20, 16)
     s += _pos(m.get("revenue_cagr_5y_pct"), 8, 25, 20)
-    s += _pos(m.get("eps_cagr_5y_pct"), 8, 25, 22)
+    s += _pos(m.get("reported_eps_cagr_5y_pct"), 8, 25, 22)
     dil = m.get("equity_capital_change_5y_pct")
     s += 10 if (dil is not None and dil < 20) else 0
     if roe:
         ev.append(f"ROE {roe:.1f}%")
-    if m.get("eps_cagr_5y_pct"):
-        ev.append(f"5y EPS CAGR {m['eps_cagr_5y_pct']:.0f}%")
+    if m.get("reported_eps_cagr_5y_pct"):
+        ev.append(f"5y EPS CAGR {m['reported_eps_cagr_5y_pct']:.0f}%")
     if roe is not None and roe < 9:
         s *= 0.5
     return s, ev
@@ -303,7 +303,7 @@ def fit_mature_value_yield(m):
         s += _pos(fp, 2, 5, 16)
         if fp >= 4:
             ev.append(f"FCF positive in {fp} of last 5 years")
-    de = m.get("net_debt_to_equity")
+    de = m.get("gross_debt_to_equity")
     s += 14 if (de is not None and de < 0.4) else (6 if (de is not None and de < 0.8) else 0)
     roce = m.get("roce_median_5y_pct")
     s += _pos(roce, 10, 22, 16)
@@ -327,7 +327,7 @@ def fit_speculative(m):
         return 0, []
     s += _pos(r3, 15, 60, 40)
     ev.append(f"loss-making with 3y revenue CAGR {r3:.0f}%")
-    de = m.get("net_debt_to_equity")
+    de = m.get("gross_debt_to_equity")
     s += 20 if (de is not None and de < 0.5) else 0
     if m.get("q_opm_yoy_delta_pp") is not None and m["q_opm_yoy_delta_pp"] > 2:
         s += 20
@@ -367,7 +367,7 @@ def fit_event_driven(m, events: list[dict] | None = None):
     if s == 0:
         return 0, []
     # downside protection matters more than upside in a special situation
-    de = m.get("net_debt_to_equity")
+    de = m.get("gross_debt_to_equity")
     if de is not None and de < 1.0:
         s += 10
     if (m.get("cfo_pat_5y") or 0) > 0.8:
@@ -453,7 +453,7 @@ def secondary_tags(m: dict, tech: dict, arche: str | None,
         t.append("Margin-recovery candidate")
     if (qp is not None and qp > 20) and (tech.get("rs_bm_13w_pct") or 0) > 5:
         t.append("PEAD candidate")
-    de = m.get("net_debt_to_equity")
+    de = m.get("gross_debt_to_equity")
     if de is not None and de > 0.4 and (m.get("cfo_pat_5y") or 0) > 1.0:
         t.append("Debt-reduction story")
     inv = m.get("investments_inr_cr")

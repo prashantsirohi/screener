@@ -73,6 +73,7 @@ request rate the site has no reason to throttle.
 | Daily 21:00 IST | `screener sync --source fundamentals --max-days 25` (staleness gate) |
 | Every 6 hours | `screener sync --source fundamentals --retry-queue --max-days 50` |
 | Weekly | `screener sync --source documents` |
+| Weekly | `screener metrics --snapshot` then `screener metrics --strict` |
 
 Prices are gated on publication time, so 19:30 is the earliest a same-day
 bhavcopy can be relied on. Index closes publish on the same schedule and reuse
@@ -236,9 +237,36 @@ run for that `as_of` at the right stage.
 **A stage failed.** The error is in `screen_stage.error` for that run. Fix, then
 re-run — completed stages are skipped.
 
-**A parser bug.** Fix the parser and run `screener rebuild-facts`. Raw payloads
-are retained precisely so a fix can be replayed across every page already
-collected, with no re-fetching and no dependence on the original files.
+**A parser bug.** Fix the parser, then:
+
+```bash
+screener reparse-pages --dry-run    # how many pages change
+screener reparse-pages              # re-parse retained HTML, checksum-verified
+screener rebuild-facts              # re-explode the facts
+```
+
+Two steps because they fix different things. `reparse-pages` re-runs the parser
+over the retained response body; `rebuild-facts` re-explodes facts from the
+parsed payload. A **mapping** fix needs only the second. A **parser** fix needs
+both — the payload cannot contain what the parser never extracted.
+
+Pages captured before migration 0017 have no retained HTML and are reported as
+unreplayable. They re-capture through the staleness gate at ~25/day; `screener
+status` shows the coverage.
+
+**A renamed source row.** `metric_id` is a slug of the aggregator's display
+label, so a rename mints a new metric and silently empties the old one.
+
+```bash
+screener metrics --snapshot         # record current coverage (run on a schedule)
+screener metrics                    # compare the last two snapshots
+screener metrics --strict           # exit non-zero on any drift
+```
+
+It reports appeared, vanished, unit-changed and coverage-collapsed metrics, and
+pairs likely renames (`'Sales' -> 'Revenue'`). If `mapping_version` differs
+between the snapshots the output says so — that part of the change is ours, not
+the source's.
 
 **Migration drift.** `screener migrate --verify` reports it. A migration edited
 after being applied halts the runner rather than layering onto an unknown base;

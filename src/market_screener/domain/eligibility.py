@@ -167,7 +167,7 @@ def assess(metrics: dict, market_cap: float | None, weeks_history: int | None,
 def data_quality(metrics: dict) -> str:
     """High/Medium/Low, on how much of the core metric set resolved."""
     core = [metrics.get("revenue_cagr_5y_pct"), metrics.get("roce_median_5y_pct"),
-            metrics.get("cfo_pat_5y"), metrics.get("net_debt_to_equity"),
+            metrics.get("cfo_pat_5y"), metrics.get("gross_debt_to_equity"),
             metrics.get("promoter_holding_pct")]
     filled = sum(1 for x in core if x is not None)
     dq = "High" if filled >= 5 else ("Medium" if filled >= 3 else "Low")
@@ -181,8 +181,8 @@ def key_risk(metrics: dict, technical_stage: str | None) -> str:
     fin = bool(metrics.get("is_financial"))
     if metrics.get("cfo_pat_5y") is not None and not fin and metrics["cfo_pat_5y"] < 0.6:
         return "Weak cash conversion (cumulative CFO/PAT below 0.6)"
-    if (metrics.get("net_debt_to_equity") or 0) > 1.8:
-        return f"Leverage: debt/equity {metrics.get('net_debt_to_equity'):.2f}"
+    if (metrics.get("gross_debt_to_equity") or 0) > 1.8:
+        return f"Leverage: debt/equity {metrics.get('gross_debt_to_equity'):.2f}"
     if (metrics.get("promoter_change_pct") or 0) < -3:
         return (f"Promoter stake down {abs(metrics['promoter_change_pct']):.1f}pp "
                 f"over 4 quarters")

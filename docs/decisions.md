@@ -550,6 +550,97 @@ the blank pages, the standalone-basis companies and the ones with no page at
 all. It is slow, because it runs the path being replaced 2,086 times; that is
 the last place the N+1 lives.
 
+### F27 — "Raw" meant raw parser output, not the raw page
+
+`screener_page_raw` parsed the HTTP body on arrival and stored only the
+resulting dict. The consequence is narrower than it sounds and worse:
+`rebuild-facts` can replay the fact *explosion* over a stored payload, so a
+mapping fix propagates — but it cannot replay the *parse*. Anything the parser
+dropped, a table it did not recognise or a row whose label had changed, was gone
+the moment the response was discarded. The README claimed a parser fix could be
+replayed over every page already collected. Half true, and the wrong half.
+
+Migration 0017 retains the gzipped body with its SHA-256, byte count, HTTP
+status, content type and the final URL after redirects. Measured on live
+captures: 166KB of HTML stores as 15.5KB, so the full corpus is roughly 36MB.
+
+`screener reparse-pages` re-runs the parser over retained HTML, verifying each
+body against its checksum first — a re-parse that skipped that could replay a
+corrupted capture into plausible facts. Follow it with `rebuild-facts` to
+propagate a parser fix end to end without re-fetching anything.
+
+**Forward-only.** Backfilling means re-fetching 2,086 pages, and a bulk refresh
+at volume is what provoked the throttle that blanked 307 of them. The staleness
+gate re-captures the corpus at ~25/day instead. `reparse-pages` reports
+unreplayable pages explicitly rather than counting them as "unchanged" — the
+difference between *checked and identical* and *could not be checked* is the
+whole point.
+
+Two details worth keeping: the checksum is over the **uncompressed** body, so it
+identifies the response independently of how it was stored; and gzip is written
+with `mtime=0`, so an unchanged page compresses to identical bytes instead of
+looking different on every capture.
+
+### F28 — A renamed source row would have silently emptied a metric
+
+`metric_id` is a slug of the aggregator's **display label**. Display labels are
+not an interface — "Sales" is already "Revenue" for lenders. When a row is
+renamed the slug changes, a new `metric_id` appears, and the old one stops
+receiving facts. Nothing errors: every ratio built on it becomes None for every
+company, which is indistinguishable from companies that do not report it.
+
+There is no way to catch this at parse time, so it is observed instead.
+`metric_coverage_snapshot` records what labels exist, what they map to, in what
+units, and how many companies carry them. `screener metrics` compares the two
+most recent snapshots and reports four things: appeared, vanished, unit changed,
+coverage collapsed. Renames are paired — one metric vanishing and another
+appearing in the same statement at similar coverage is reported as
+`'Sales' -> 'Revenue'` rather than as two unrelated lines.
+
+`mapping_version` is what keeps it honest. It is a hash of our own alias, unit
+and sign tables, so a label change under an unchanged version is **the source's**
+doing and one accompanied by a new version is **ours**. Without it, editing
+`LABEL_ALIASES` looks identical to the aggregator renaming a row.
+
+Note the contrast with `metrics.MODEL_VERSION` (F25), which is manual: these are
+pure data whose content fully determines the mapping, so a hash is exact and
+cannot be forgotten; hashing the metrics *module* would fire on a comment edit.
+
+The thresholds exist to keep it quiet: coverage moves are only reported at ≥25%,
+and only for metrics held by ≥20 companies, because a metric held by four losing
+one is a 25% "collapse" that means nothing.
+
+### F29 — Two metric names described numbers the system has never had
+
+`net_debt_to_equity` was gross borrowings over equity — the aggregator does not
+report cash separately, so there is no net figure and leverage is overstated for
+cash-rich companies. `normalized_eps_cagr_5y_pct` is reported EPS with
+exceptional items included; nothing is normalised.
+
+The internal names are now `gross_debt_to_equity` and
+`reported_eps_cagr_{3,5}y_pct`. **The CSV headers are unchanged**: they are a
+frozen 37-column contract that Phase 2 consumes and the parity baseline asserts,
+so renaming them would break two things to correct a label. `LEGACY_CSV_NAMES`
+in `metrics.py` is the one place the old names survive, applied on write.
+
+This leaves `normalized_eps_cagr_5y_pct` as a column header that misstates its
+contents — a deliberate trade of accuracy for contract stability. The summary's
+data dictionary now names all three discrepancies explicitly rather than leaving
+them to be discovered.
+
+The risk in a 30-site rename is a half-finished one: a surviving
+`m.get("net_debt_to_equity")` returns None, and a leverage test that never fires
+looks exactly like a company with no debt. Two things caught that. A guard test
+asserts the old keys are read nowhere and survive only in the contract layer,
+and `runs diff` across all 2,086 companies showed **no field changes** at all.
+
+The parity suite also earned its place here. `test_priority_scores_match` feeds
+the oracle's bundle and the port's bundle through the *same* scorer to isolate
+the metrics difference — so the oracle's bundle had to be translated to the new
+keys, or the scorer read None and invented a six-point difference in
+`financial_quality_20` for most of the golden set. It failed loudly, which is
+exactly what it is for.
+
 ---
 
 ## Open items
