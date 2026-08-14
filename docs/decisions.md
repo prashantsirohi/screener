@@ -515,6 +515,41 @@ hashing the source would invalidate on a comment edit.
 No migration was needed. Pre-fix `input_hash` values were computed without the
 config, so they simply stopped matching and the cache self-invalidated.
 
+### F26 — The screen's cost was round trips, not arithmetic
+
+`s80` took 485 of a 496-second run. The proposed remedy was a wide
+`fundamental_feature_snapshot` serving table so the metrics would not have to be
+recomputed each run. Measuring first showed the premise was wrong:
+
+```
+payload_for_metrics   32.63s / 200  ->  340.4s for 2,086   <- 4,172 round trips
+metrics.compute        0.12s / 200  ->    1.3s for 2,086
+ONE bulk fact query    4.45s        ->  1,151,022 rows
+```
+
+**The arithmetic is 1.3 seconds.** A snapshot table would have cached that, at
+the price of a denormalised copy of every metric to keep in sync with the EAV
+store — and it would not have touched the 340 seconds actually being spent.
+
+`payloads_for_universe()` replaces 4,172 round trips with two queries. `s80`
+fell from **378s to 50s** on identical outputs.
+
+The snapshot table was therefore **not built**. Nothing reads it yet: Phase 2
+does not exist, and the same bulk path will serve it when it does. This codebase
+has already produced three artefacts that existed but were never read —
+`technical_feature` (F-gate work), `candidate_target_high` and
+`min_select_score` as dead config (D9) — and each looked like working
+infrastructure until someone checked. A fourth was not worth the speed it did
+not deliver.
+
+The correctness risk in the refactor is that a second reconstruction path drifts
+from the first, changing answers with no visible cause. Both paths now share
+`_assemble()`, and `tests/parity/test_bulk_payload_parity.py` compares them over
+the **entire** universe rather than a sample — a sample would very likely miss
+the blank pages, the standalone-basis companies and the ones with no page at
+all. It is slow, because it runs the path being replaced 2,086 times; that is
+the last place the N+1 lives.
+
 ---
 
 ## Open items
@@ -524,9 +559,13 @@ config, so they simply stopped matching and the cache self-invalidated.
   rather than silent, and recent weeks — what current screening reads — agree
   essentially perfectly.
 - **NSE `quote-equity` returns 403** to unauthenticated clients, so the
-  independent share-count source is unavailable. Market-cap coverage reached
-  2,085/2,086 through the retry queue instead, making it a redundancy rather than
-  a dependency.
+  independent share-count source is unavailable. Re-confirmed 2026-08-14 with
+  cookie warmup: 403 on RELIANCE and JAMNAAUTO across three retries each, and
+  `api/equity-meta-info` is 404. `shares_outstanding` coverage is therefore
+  **0**, and market cap is aggregator-reported for 2,085 of 2,086 companies —
+  a dependency, not the redundancy it was meant to be. Making
+  `NSE close x issued shares` primary needs an authenticated session or another
+  vendor first. This matters because the market-cap band excludes 789 companies.
 - **35 demerger-affected securities** still fall back to Yahoo, because splitting
   value across the resulting entities needs data the NSE feed does not carry.
 - **191 of 2,051 securities have no computable relative strength** (fewer than 30

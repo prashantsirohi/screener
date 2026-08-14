@@ -89,13 +89,20 @@ def test_the_screen_bounds_both_fundamentals_and_events():
     """
     The regression itself: both reads existed and both were unbounded, while
     the underlying functions already supported a cutoff.
+
+    Fundamentals are now bulk-loaded, so the bound moved from the per-security
+    call to `payloads_for_universe`. The assertion tracks the boundary, not the
+    call shape - what must hold is that the screen never reads fundamentals or
+    events without a cutoff, however they are fetched.
     """
     from market_screener.pipeline.stages import s80_phase1_screen as s80
 
     src = inspect.getsource(s80.run)
     assert "ctx.pit_cutoff" in src
-    assert "payload_for_metrics(db, sid, as_of=cutoff" in src
+    assert "payloads_for_universe(db, as_of=ctx.pit_cutoff" in src
     assert 'event_flags(db, "v1", as_of=cutoff)' in src
+    assert "payload_for_metrics(db, sid" not in src, \
+        "the per-security N+1 read is back in the universe loop"
 
 
 # ---- the stage fingerprint --------------------------------------------------

@@ -191,6 +191,23 @@ dated before that shows an empty store rather than history. Improving this needs
 the results-declaration date from the announcement feed, which the schema already
 supports.
 
+## Run cost
+
+A full `screener screen` is roughly a minute, dominated by the technical layer:
+
+| Stage | Time | What it does |
+|---|---:|---|
+| `s80_phase1_screen` | ~50s | Weinstein features for 2,051 securities, then eligibility, classification and scoring for 2,086 |
+| `s85_phase1_outputs` | ~6s | Selection, provenance, five artifacts |
+| `s90_summary` | ~2s | |
+| `s95_qc` | ~3s | 19 checks |
+
+`s80` was 378s until the fundamentals read was bulk-loaded. It is now bounded by
+the weekly-bar scan and the Weinstein arithmetic, not by database round trips.
+
+If it regresses, check first whether something reintroduced a per-security query
+inside the universe loop — that is what cost 340 seconds.
+
 ## Stage caching
 
 An unchanged re-run reuses completed stages:

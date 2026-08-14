@@ -141,6 +141,11 @@ def run(ctx: RunContext) -> StageResult:
                   for r in features.compute_universe(st, as_of)}
     labels = fv._label_lookup(db)
 
+    # Every payload in two queries rather than two per company. The per-security
+    # path cost 340 of this stage's 485 seconds in 4,172 round trips, while the
+    # arithmetic it feeds takes 1.3 seconds for the whole universe.
+    payloads = fv.payloads_for_universe(db, as_of=ctx.pit_cutoff, labels=labels)
+
     gate = eligibility.TechnicalGate.from_settings(st.screen)
     if gate.active:
         log.info("technical gate active: excluding %s%s",
@@ -178,11 +183,14 @@ def run(ctx: RunContext) -> StageResult:
         sid, sym = u["security_id"], u["symbol"]
         industry = u["nse_industry"]
 
-        # Bounded on available_at - knowledge time. No publication date exists
-        # for aggregator facts, so scrape time is the conservative bound: a
-        # number never appears in a run dated before it was actually held.
+        # Bulk-loaded above, bounded on available_at - knowledge time. No
+        # publication date exists for aggregator facts, so scrape time is the
+        # conservative bound: a number never appears in a run dated before it
+        # was actually held. A security absent from the map is one the universe
+        # query returned but the payload query did not, which should be
+        # impossible; treat it as unknown rather than as an empty payload.
         m = metrics_mod.compute(
-            fv.payload_for_metrics(db, sid, as_of=cutoff, labels=labels), industry)
+            payloads.get(sid) or {"error": "unknown security"}, industry)
         tech = tech_by_id.get(sid) or {
             "technical_stage": "Indeterminate-insufficient adjusted history",
             "stage_rationale": "no adjusted weekly price history retrieved"}

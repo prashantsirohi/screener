@@ -40,7 +40,7 @@ the queue, and each run records whether the floor or the target bound it.
 
 ## Current state
 
-Phase 1 is complete and passes **328 tests**. Phases 2 (forensic validation and
+Phase 1 is complete and passes **333 tests**. Phases 2 (forensic validation and
 valuation) and 3 (technical confirmation and portfolio construction) are not
 built; the schema and point-in-time design do not preclude them.
 
