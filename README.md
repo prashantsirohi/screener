@@ -40,7 +40,7 @@ the queue, and each run records whether the floor or the target bound it.
 
 ## Current state
 
-Phase 1 is complete and passes **304 tests**. Phases 2 (forensic validation and
+Phase 1 is complete and passes **328 tests**. Phases 2 (forensic validation and
 valuation) and 3 (technical confirmation and portfolio construction) are not
 built; the schema and point-in-time design do not preclude them.
 
@@ -141,8 +141,10 @@ implemented twice eventually produces two answers and no test tells you which is
 right.
 
 **Point-in-time by construction.** `screener_fact` carries `available_at` in its
-primary key, so a restatement never overwrites what was known before, and an
-as-of query cannot see a number that had not been published yet.
+primary key, so a restatement never overwrites what was known before. Every
+screening read — fundamentals, announcements, prices, and the source log itself —
+is bounded at midnight IST ending the as-of day, so `--as-of 2026-08-10`
+reproduces what was knowable then rather than what is known now.
 
 **One return basis per run.** Yahoo's adjusted close is total return; a bhavcopy
 series adjusted for splits and bonuses is price return. Mixing them inside one

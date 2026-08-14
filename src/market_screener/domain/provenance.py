@@ -16,7 +16,7 @@ follow any figure back to the fetch that produced it.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from datetime import date
+from datetime import date, datetime
 
 from ..db.connection import Database
 
@@ -43,7 +43,16 @@ class SourceRecord:
 
 
 # Exchange-level sources, recorded once per run from the actual sync batches.
-def global_sources(db: Database, as_of: date) -> list[SourceRecord]:
+def global_sources(db: Database, as_of: date,
+                   cutoff: datetime | None = None) -> list[SourceRecord]:
+    """
+    Corpus-level source records.
+
+    `cutoff` is the run's point-in-time boundary. Provenance has to respect it
+    for the same reason the metrics do, and arguably more so: a source log that
+    cites a page fetched after the as_of it claims to document is not evidence,
+    it is a contradiction.
+    """
     out: list[SourceRecord] = []
 
     uni = db.fetch_one("""
@@ -70,8 +79,9 @@ def global_sources(db: Database, as_of: date) -> list[SourceRecord]:
     px = db.fetch_one("""
         SELECT min(trade_date) AS first_day, max(trade_date) AS last_day,
                count(DISTINCT trade_date) AS days, count(*) AS rows
-        FROM   market.price_daily WHERE source = 'nse_bhavcopy'
-    """)
+        FROM   market.price_daily
+        WHERE  source = 'nse_bhavcopy' AND trade_date <= %s
+    """, (as_of,))
     if px and px["days"]:
         out.append(SourceRecord(
             source_id=f"NSE-BHAV-{px['first_day']}-{px['last_day']}",
@@ -88,7 +98,8 @@ def global_sources(db: Database, as_of: date) -> list[SourceRecord]:
     ann = db.fetch_one("""
         SELECT min(announced_at)::date AS f, max(announced_at)::date AS l, count(*) AS n
         FROM   market.announcement
-    """)
+        WHERE  (%s::timestamptz IS NULL OR announced_at < %s::timestamptz)
+    """, (cutoff, cutoff))
     if ann and ann["n"]:
         out.append(SourceRecord(
             source_id=f"NSE-ANN-{ann['f']}-{ann['l']}",
@@ -141,7 +152,8 @@ def global_sources(db: Database, as_of: date) -> list[SourceRecord]:
 
 
 def company_sources(db: Database, security_ids: list[int],
-                    as_of: date) -> list[SourceRecord]:
+                    as_of: date,
+                    cutoff: datetime | None = None) -> list[SourceRecord]:
     """
     Per-company sources, keyed to the actual rows that produced the numbers.
 
@@ -159,8 +171,9 @@ def company_sources(db: Database, security_ids: list[int],
         FROM   market.screener_page_raw p
         JOIN   market.security s USING (security_id)
         WHERE  p.security_id = ANY(%s) AND NOT p.is_blank
+          AND  (%s::timestamptz IS NULL OR p.fetched_at < %s::timestamptz)
         ORDER  BY p.security_id, p.fetched_at DESC
-    """, (security_ids,))
+    """, (security_ids, cutoff, cutoff))
     for p in pages:
         d = p["fetched_at"].date()
         out.append(SourceRecord(
@@ -206,8 +219,9 @@ def company_sources(db: Database, security_ids: list[int],
         JOIN   market.announcement_classification c USING (announcement_hash)
         JOIN   market.security s ON s.security_id = a.security_id
         WHERE  a.security_id = ANY(%s) AND c.taxonomy_version LIKE 'v1:%%'
+          AND  (%s::timestamptz IS NULL OR a.announced_at < %s::timestamptz)
         GROUP  BY 1, 2, 3
-    """, (security_ids,))
+    """, (security_ids, cutoff, cutoff))
     for e in events:
         out.append(SourceRecord(
             source_id=f"{e['symbol']}-EVT-{e['latest']}",

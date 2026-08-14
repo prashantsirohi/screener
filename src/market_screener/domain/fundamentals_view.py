@@ -42,16 +42,19 @@ def reconstruct_payload(db: Database, security_id: int, *,
     """
     labels = labels or _label_lookup(db)
 
-    params: list[Any] = [security_id]
+    # The cutoff is in the statement unconditionally, as a NULL-tolerant
+    # predicate, rather than appended only when as_of is supplied. Same result,
+    # but the bound is now visible in the SQL itself instead of depending on
+    # every caller remembering to ask for it - which is precisely how the screen
+    # came to read facts from the future for as long as it did.
+    params: list[Any] = [security_id, as_of, as_of]
     sql = """
         SELECT DISTINCT ON (period_type, report_date, statement_basis, metric_id)
                period_type, report_date, statement_basis, metric_id, value, available_at
         FROM   market.screener_fact
         WHERE  security_id = %s
+          AND  (%s::timestamptz IS NULL OR available_at <= %s::timestamptz)
     """
-    if as_of is not None:
-        sql += " AND available_at <= %s"
-        params.append(as_of)
     if basis is not None:
         sql += " AND statement_basis = %s"
         params.append(basis)

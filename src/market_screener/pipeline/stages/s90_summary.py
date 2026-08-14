@@ -42,12 +42,17 @@ def run(ctx: RunContext) -> StageResult:
     price_date = db.fetch_value(
         "SELECT max(trade_date) AS d FROM market.price_daily WHERE trade_date <= %s",
         (as_of,))
+    # Both cutoffs the summary reports are themselves point-in-time reads. Left
+    # unbounded they describe the store as it is now, not as the run saw it, so
+    # a backdated run would print a technical or financial cutoff later than its
+    # own as_of - a header contradicting the table beneath it.
     tech_date = db.fetch_value(
-        "SELECT max(week_end_date) AS d FROM market.weekly_bar WHERE is_complete")
+        "SELECT max(week_end_date) AS d FROM market.weekly_bar "
+        "WHERE is_complete AND week_end_date <= %s", (as_of,))
     fin_period = db.fetch_value("""
         SELECT max(report_date) AS d FROM market.screener_fact
-        WHERE period_type = 'annual'
-    """)
+        WHERE  period_type = 'annual' AND available_at < %s
+    """, (ctx.pit_cutoff,))
     basis = ctx.settings.price_basis
     src_mix = db.fetch_all("""
         SELECT source, count(*) AS n FROM market.weekly_bar_source_choice GROUP BY 1

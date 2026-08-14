@@ -127,8 +127,8 @@ def run(ctx: RunContext) -> StageResult:
     sec_ids = [r["security_id"] for r in db.fetch_all(
         "SELECT security_id FROM market.phase1_universe WHERE run_id = %s",
         (ctx.run_id,))]
-    records = provenance.global_sources(db, as_of) + \
-        provenance.company_sources(db, sec_ids, as_of)
+    records = provenance.global_sources(db, as_of, ctx.pit_cutoff) + \
+        provenance.company_sources(db, sec_ids, as_of, ctx.pit_cutoff)
 
     id_rows = []
     for sid in sec_ids:

@@ -155,8 +155,13 @@ def run(ctx: RunContext) -> StageResult:
     n_tf = _write_technical_features(db, tech_by_id, ctx.run_id)
     log.info("persisted %d technical feature rows", n_tf)
 
+    # Point-in-time boundary for every fact this run may read. Bounded on
+    # announced_at - market time - so a reproduced run sees the events that were
+    # public then, and none that came later.
+    cutoff = ctx.pit_cutoff
+
     events_by_symbol: dict[str, list[dict]] = {}
-    for r in classify_events.event_flags(db, "v1"):
+    for r in classify_events.event_flags(db, "v1", as_of=cutoff):
         events_by_symbol.setdefault(r["symbol"], []).append({
             "event_class": r["event_class"],
             "latest_date": str(r["latest_date"]),
@@ -173,7 +178,11 @@ def run(ctx: RunContext) -> StageResult:
         sid, sym = u["security_id"], u["symbol"]
         industry = u["nse_industry"]
 
-        m = metrics_mod.compute(fv.payload_for_metrics(db, sid, labels=labels), industry)
+        # Bounded on available_at - knowledge time. No publication date exists
+        # for aggregator facts, so scrape time is the conservative bound: a
+        # number never appears in a run dated before it was actually held.
+        m = metrics_mod.compute(
+            fv.payload_for_metrics(db, sid, as_of=cutoff, labels=labels), industry)
         tech = tech_by_id.get(sid) or {
             "technical_stage": "Indeterminate-insufficient adjusted history",
             "stage_rationale": "no adjusted weekly price history retrieved"}

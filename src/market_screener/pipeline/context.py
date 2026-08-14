@@ -26,6 +26,18 @@ from ..db.connection import Database
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
+def pit_cutoff(as_of: date) -> datetime:
+    """
+    Everything knowable by the close of `as_of`, in market time.
+
+    A single instant, derived once and threaded into every point-in-time read,
+    so no stage can invent its own boundary. Exclusive: rows are admitted with
+    `< cutoff`, i.e. strictly before midnight IST that ends the as_of day.
+    """
+    return datetime.combine(as_of + timedelta(days=1),
+                            datetime.min.time(), tzinfo=IST)
+
+
 def new_run_id(phase: int, as_of: date) -> str:
     return f"p{phase}-{as_of.isoformat()}-{uuid.uuid4().hex[:8]}"
 
@@ -75,6 +87,11 @@ class RunContext:
     state: dict[str, Any] = field(default_factory=dict)   # passed between stages
 
     @property
+    def pit_cutoff(self) -> datetime:
+        """The point-in-time boundary for every fact this run may read."""
+        return pit_cutoff(self.as_of)
+
+    @property
     def run_dir(self) -> Path:
         return self.settings.paths.run_dir(self.run_id)
 
@@ -101,8 +118,22 @@ def compute_input_hash(parts: dict[str, Any]) -> str:
     return hashlib.sha256(blob).hexdigest()[:16]
 
 
-def data_fingerprint(db: Database, as_of: date) -> dict[str, Any]:
-    """The state of every table the screen reads, condensed to a few numbers."""
+def data_fingerprint(db: Database, as_of: date,
+                     settings: Settings | None = None) -> dict[str, Any]:
+    """
+    The state of every table the screen reads, condensed to a few numbers -
+    plus the configuration and code version that decide what it does with them.
+
+    Data alone is not enough. Six distinct config hashes once shared a single
+    input hash for every stage, which made gated and ungated runs, and both
+    price bases, mutually interchangeable to the cache: a run would reuse
+    another configuration's output while recording its own config_hash. Only
+    the habit of passing --force kept the results honest.
+
+    `metric_model` covers the other blind spot. A formula change in domain/
+    moves no row count and no timestamp, so without a version to bump the cache
+    would serve results computed by code that no longer exists.
+    """
     row = db.fetch_one("""
         SELECT
           (SELECT count(*) FROM market.security WHERE is_active)          AS securities,
@@ -115,4 +146,11 @@ def data_fingerprint(db: Database, as_of: date) -> dict[str, Any]:
           (SELECT count(*) FROM market.announcement_classification
             WHERE taxonomy_version LIKE 'v1:%%')                          AS event_flags
     """)
-    return {"as_of": as_of.isoformat(), **{k: str(v) for k, v in (row or {}).items()}}
+    from ..domain.metrics import MODEL_VERSION
+
+    out = {"as_of": as_of.isoformat(),
+           **{k: str(v) for k, v in (row or {}).items()},
+           "metric_model": MODEL_VERSION}
+    if settings is not None:
+        out["config_hash"] = settings.config_hash()
+    return out

@@ -13,7 +13,7 @@ v2 is single-label, first match wins.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime
 
 from ..db.connection import Database
 from ..db.copy_io import copy_rows, create_staging, drop_staging
@@ -142,12 +142,23 @@ def relink_announcements(db: Database) -> dict:
             "still_unlinked_symbols": remaining["symbols"]}
 
 
-def event_flags(db: Database, version: str = "v1") -> list[dict]:
+def event_flags(db: Database, version: str = "v1", *,
+                as_of: datetime | None = None) -> list[dict]:
     """
     Latest event per (security, category) - the shape the screen consumes.
 
     Mirrors the legacy `event_flags.csv`: one row per symbol and event class,
     carrying the most recent occurrence.
+
+    `as_of` is the point-in-time boundary and should always be supplied by a
+    screening run; without it this returns every announcement ever ingested,
+    including ones that postdate the run being reproduced.
+
+    The bound is on `announced_at`, not `available_at`. Market time is the right
+    semantics here: the event was public the moment it was announced, whereas
+    `available_at` records when the scraper happened to see it - and for a
+    backfilled window that collapses to a single scrape date, which would make
+    every backdated run see nothing at all.
     """
     like = "v1:%" if version == "v1" else version
     op = "LIKE" if version == "v1" else "="
@@ -161,8 +172,9 @@ def event_flags(db: Database, version: str = "v1") -> list[dict]:
         JOIN   market.security s ON s.security_id = a.security_id
         WHERE  c.taxonomy_version {op} %s
           AND  a.security_id IS NOT NULL
+          AND  (%s::timestamptz IS NULL OR a.announced_at < %s::timestamptz)
         ORDER  BY a.security_id, c.primary_category, a.announced_at DESC
-    """, (like,))
+    """, (like, as_of, as_of))
 
 
 def diff_versions(db: Database) -> dict:

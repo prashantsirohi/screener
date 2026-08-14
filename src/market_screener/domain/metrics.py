@@ -20,6 +20,14 @@ from pathlib import Path
 
 import numpy as np
 
+# Bump whenever a formula in this module or in archetypes/scoring changes.
+#
+# The stage cache fingerprints row counts and timestamps, neither of which move
+# when a formula changes - so without this, editing a metric and re-running
+# without --force serves the previous code's answers. It is manual on purpose:
+# hashing the source would invalidate the cache on a comment edit.
+MODEL_VERSION = "1"
+
 FY_RE = re.compile(r"^(Mar|Jun|Sep|Dec)\s+(\d{4})$")
 
 

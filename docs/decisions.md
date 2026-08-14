@@ -443,6 +443,78 @@ missing column — it reads by `run_id` and nothing had been written. A skipped
 stage must still make its output available to the current run, or self-contained
 runs and run-to-run diffing do not work.
 
+### F24 — The point-in-time design was doing nothing for the screen
+
+`available_at` sits in the `screener_fact` primary key. It is the reason the
+store is EAV rather than a wide table, and the whole argument for D3. The screen
+never passed a cutoff to it.
+
+`payload_for_metrics()` and `reconstruct_payload()` both accepted `as_of`;
+`s80` called them without it. `event_flags()` had no such parameter at all, so
+announcements could not be bounded even in principle. Measured at the time of
+the fix: **172,435 facts carried `available_at` of 2026-08-11 and 552
+announcements postdated 2026-08-10**, so any re-run dated the 10th silently
+consumed all of them.
+
+Three smaller instances of the same thing surfaced while fixing it — the source
+log cited pages fetched after the run's own `as_of`, and the summary header
+reported technical and financial cutoffs read from the whole store rather than
+from what the run could see. A header contradicting the table beneath it.
+
+Two details worth keeping:
+
+- **The bound differs by source, deliberately.** Fundamentals bound on
+  `available_at` (knowledge time — no publication date exists, so scrape time is
+  the conservative choice). Announcements bound on `announced_at` (market time —
+  the event was public when announced, and bounding on `available_at` would
+  collapse a backfilled window to one scrape date and make backdated runs see
+  nothing).
+- **The predicate is now unconditional in the SQL.** `reconstruct_payload` used
+  to append `AND available_at <= %s` only when a cutoff was supplied, so the
+  statement itself carried no bound and correctness depended on every caller
+  remembering. That is exactly how the bug survived. It is now a NULL-tolerant
+  predicate inside the statement, matching its two siblings.
+
+The confirmation is the pleasing part: a run backdated to 2026-08-10 excludes
+**exactly 307** companies as `EX_NO_FUNDAMENTALS`, independently reproducing the
+frozen baseline's blank-page count — a number nothing was tuned to.
+
+`tests/unit/test_no_unbounded_pit_reads.py` now lints `domain/` and
+`pipeline/stages/` for reads of these tables without a time bound, and carries a
+test proving the lint can fail.
+
+### F25 — The stage cache treated six configurations as interchangeable
+
+`data_fingerprint()` covered row counts and max timestamps; `compute_input_hash`
+added the stage name; `_previous_matching_run()` matched on stage, hash and
+`as_of`. None of them involved `config_hash`. The run table showed the result
+plainly:
+
+```
+stage               input_hash          distinct config_hashes
+s80_phase1_screen   3af0f2d24093d03f    6
+s85_phase1_outputs  7f76f90bcca23e20    6
+```
+
+Gated and ungated, `split_bonus` and `yahoo_adjclose`, all mutually
+substitutable. A run would serve another configuration's candidate list while
+recording its own `config_hash` — two runs the table claims are different and
+are not. Every result up to that point was sound only because `--force` had been
+used every time, which is luck rather than design.
+
+The fix is two independent barriers: `config_hash` and a `metric_model` version
+inside the fingerprint, and a redundant `AND r.config_hash = %s` on the reuse
+lookup. The redundancy is intentional — the failure is silent and the guard is
+one line.
+
+`metric_model` covers the second blind spot: a formula change in `domain/` moves
+no row count and no timestamp, so without a version to bump the cache would
+serve answers computed by code that no longer exists. It is manual because
+hashing the source would invalidate on a comment edit.
+
+No migration was needed. Pre-fix `input_hash` values were computed without the
+config, so they simply stopped matching and the cache self-invalidated.
+
 ---
 
 ## Open items

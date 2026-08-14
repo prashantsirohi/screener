@@ -57,8 +57,17 @@ def _close_run(db: Database, ctx: RunContext, status: str, counts: dict) -> None
 
 
 def _previous_matching_run(db: Database, stage: str, as_of: date,
-                           input_hash: str) -> str | None:
-    """The most recent run whose completed `stage` read exactly these inputs."""
+                           input_hash: str, config_hash: str) -> str | None:
+    """
+    The most recent run whose completed `stage` read exactly these inputs under
+    exactly this configuration.
+
+    The config_hash predicate is deliberately redundant - it is already inside
+    input_hash. It is here as a second, independent barrier, because the cost of
+    the two disagreeing is a run that silently serves another configuration's
+    candidate list while recording its own hash. A redundant WHERE clause is a
+    cheap price for making that unrepresentable.
+    """
     return db.fetch_value("""
         SELECT st.run_id
         FROM   market.screen_stage st
@@ -66,9 +75,10 @@ def _previous_matching_run(db: Database, stage: str, as_of: date,
         WHERE  st.stage = %s AND st.status IN ('complete', 'skipped')
           AND  st.input_hash = %s
           AND  r.as_of_date = %s AND r.status IN ('complete', 'partial')
+          AND  r.config_hash = %s
         ORDER  BY st.finished_at DESC NULLS LAST
         LIMIT  1
-    """, (stage, input_hash, as_of))
+    """, (stage, input_hash, as_of, config_hash))
 
 
 def _record_stage(db: Database, ctx: RunContext, stage: str, status: str,
@@ -139,7 +149,7 @@ def run_phase1(settings: Settings, db: Database, *, as_of: date | None = None,
                      params={"force": force, "stages": stages})
     ctx.state["started_at"] = datetime.now(IST).isoformat()
 
-    fingerprint = data_fingerprint(db, as_of)
+    fingerprint = data_fingerprint(db, as_of, settings)
     _open_run(db, ctx, fingerprint)
     log.info("phase 1 run %s (as_of=%s, basis=%s)", run_id, as_of, settings.price_basis)
 
@@ -156,7 +166,8 @@ def run_phase1(settings: Settings, db: Database, *, as_of: date | None = None,
 
         input_hash = compute_input_hash({"stage": stage, **fingerprint})
         if not force and stage not in NEVER_SKIP:
-            prior = _previous_matching_run(db, stage, as_of, input_hash)
+            prior = _previous_matching_run(db, stage, as_of, input_hash,
+                                           settings.config_hash())
             if prior and prior != ctx.run_id:
                 log.info("%s inputs unchanged - reusing %s", stage, prior)
                 # A skipped stage must still leave its output available to THIS

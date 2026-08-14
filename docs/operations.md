@@ -164,6 +164,53 @@ Also worth watching:
 - **`sync_batch` rows stuck in `running`.** A process died. The next run reaps
   them to `interrupted`.
 
+## Backdated runs
+
+`--as-of` is a real point-in-time boundary, not a label. Every fundamental fact,
+announcement, price bar and source-log entry is bounded at midnight IST ending
+the as-of day, so a re-run reproduces what was knowable then.
+
+```bash
+screener screen --as-of 2026-08-10 --force
+```
+
+Expect fewer eligible companies the further back you go — that is the mechanism
+working. A run dated 2026-08-10 excludes 307 companies as `EX_NO_FUNDAMENTALS`
+because their pages were blank until the retry queue recovered them on the 11th.
+
+The bound differs by source on purpose:
+
+| Source | Bound | Meaning |
+|---|---|---|
+| Fundamentals | `available_at` | When we held the number. No publication date exists, so scrape time is the conservative choice |
+| Announcements | `announced_at` | When the market was told. Backfilled rows share one scrape date, so bounding on `available_at` would show nothing |
+
+**The screen cannot be honestly backtested before the first scrape date.** Facts
+carry the timestamp we retrieved them, not the date they were published, so a run
+dated before that shows an empty store rather than history. Improving this needs
+the results-declaration date from the announcement feed, which the schema already
+supports.
+
+## Stage caching
+
+An unchanged re-run reuses completed stages:
+
+```
+s80_phase1_screen inputs unchanged - reusing p1-2026-08-13-879bdb76
+```
+
+The fingerprint covers the data (row counts, watermarks), the **configuration**
+(`config_hash` — every threshold, the price basis, the technical gate, the score
+floor) and the **metric model version**. Change any of them and the stage
+recomputes.
+
+`MODEL_VERSION` in `domain/metrics.py` must be **bumped by hand** when a formula
+changes. A formula edit moves no row count and no timestamp, so without it a
+non-forced re-run serves the previous code's answers. This is the one cache input
+that is not automatic.
+
+`--force` bypasses the cache entirely.
+
 ## Recovering from a failure
 
 **A killed run.** `screener screen --resume` continues the most recent unfinished
