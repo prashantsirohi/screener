@@ -641,6 +641,54 @@ keys, or the scorer read None and invented a six-point difference in
 `financial_quality_20` for most of the golden set. It failed loudly, which is
 exactly what it is for.
 
+### D10 — Phase 2 validates the numbers, not the filings
+
+The brief's Phase 2 is a forensic review against primary documents. That is not
+buildable here: **0 of 246 discovered documents have ever been fetched**, across
+5 of 2,086 companies, and `fetch_status` is `not_fetched` for every one. The
+checks a forensic analyst reaches for first — auditor qualifications,
+related-party transactions, pledging, contingent liabilities, CWIP ageing — all
+need the annual report.
+
+So Phase 2 does what the statement history genuinely supports: thirteen forensic
+checks (accruals, cash conversion, receivables against sales, working-capital
+decay, dilution, promoter selling, leverage, interest cover, cycle position,
+CWIP conversion, persistent negative FCF) and five valuation methods. Every
+advancing name carries an explicit list of what a filing would still have to
+answer, and the summary states plainly that a clean forensic score means
+"nothing visible in the statements", not "clean".
+
+Three design points carried over from Phase 1's mistakes:
+
+- **The verdict is a matrix, not a threshold.** The first version scored
+  forensics, valuation and Phase 1 priority into a composite and advanced above
+  a bar. It failed exactly as the Phase 1 score floor did (D9): three
+  already-high inputs average into a compressed band — min 53, median 74 — so
+  any plausible bar sat below the minimum and **122 of 150 advanced**, with the
+  cap doing all the narrowing. The rule is now the joint judgement an analyst
+  actually makes — accept forensic questions if the price pays for them, accept
+  a full price if the statements are clean, never both — which narrows 150 to 63
+  on evidence before the cap engages. The composite survives only as the ranking
+  key.
+- **A disqualifying finding is a gate.** It is applied before scoring, for the
+  same reason the Weinstein stage became a gate (D8). A company whose cumulative
+  CFO covers 40% of reported profit should not advance because its P/E is low;
+  that combination is what a value trap looks like from outside. `P2QC05`
+  asserts none leaked.
+- **Valuation keeps five answers, not one.** Every input is a trailing
+  aggregator figure and there are no forward estimates anywhere in the system, so
+  a single fair value would imply precision the data cannot support. Where
+  methods disagree the assessment records the disagreement rather than averaging
+  it away, and the overall verdict is the *median* method — averaging "cheap"
+  and "stretched" into "fair" would report an agreement that does not exist.
+  `unassessable` is a real answer: reporting a loss-maker as expensive is a
+  category error.
+
+Phase 2 reuses the Phase 1 orchestrator rather than copying it. Run tracking,
+stage caching, resume and the config-aware input hash are phase-agnostic, and a
+second copy would be a second place for the cache to start crossing
+configurations (F25).
+
 ---
 
 ## Open items
@@ -662,4 +710,8 @@ exactly what it is for.
 - **191 of 2,051 securities have no computable relative strength** (fewer than 30
   overlapping weeks with the benchmark). Immaterial today because the RS floor is
   off; turning it on would exclude them as `EX_WEAK_RS`.
-- **Phases 2 and 3 are not built.**
+- **No primary filing has ever been fetched.** 246 documents discovered across 5
+  companies, all `not_fetched`. This is the single largest gap: it is what keeps
+  Phase 2 to statement-level forensics (D10) and leaves auditor qualifications,
+  related-party transactions, pledging and CWIP ageing unassessed.
+- **Phase 3 is not built.**

@@ -43,11 +43,36 @@ recorded on every run.
 ```bash
 screener sync --source prices        # incremental from the watermark
 screener derive --what all           # actions, adjusted, weekly, reconcile
-screener screen                      # Phase 1
+screener screen                      # Phase 1: 2,086 -> 150
+screener phase2                      # Phase 2: 150 -> 40-60
 ```
 
 An unchanged re-run is cheap: `s80` skips on a matching input hash and carries
 the previous run's rows forward, so the artifacts are still produced.
+
+`phase2` reads the most recent completed Phase 1 run for the same `as_of` **and
+the same config hash** — reviewing a candidate list produced under different
+gates or a different price basis would mix two screening regimes in one report.
+It fails with an explicit message rather than reviewing a stale set.
+
+### Reading the Phase 2 output
+
+`bound_by` is the number to look at. `target` means more names cleared the
+evidence bar than the 60-name cap allows; `evidence` means fewer did, and the
+short list is the answer rather than a fault.
+
+The verdict is a joint judgement on statements and price, not a score threshold:
+
+| statements \ price | cheap | fair | full | stretched |
+|---|---|---|---|---|
+| clean | advance | advance | advance | hold |
+| watch | advance | advance | hold | hold |
+| concern | advance | hold | reject | reject |
+| disqualifying | reject | reject | reject | reject |
+
+**`hold` is not a soft reject.** It means the statements raise a question the
+price does not compensate for, and a filing would settle it. Those names are the
+first place to spend manual research time.
 
 ### Fundamentals
 

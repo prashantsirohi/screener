@@ -385,6 +385,36 @@ def _cmd_screen(args) -> int:
     return 0 if out["status"] == "complete" else 1
 
 
+def _cmd_phase2(args) -> int:
+    from datetime import date as _date
+
+    from .pipeline import orchestrator
+    from .pipeline.stages.s110_phase2_assess import NoPhase1Run
+
+    st, db = _open_db(args)
+    if db is None:
+        return 1
+    as_of = _date.fromisoformat(args.as_of) if args.as_of else _date.today()
+    try:
+        out = orchestrator.run_phase2(
+            st, db, as_of=as_of, force=args.force, resume=args.resume,
+            stages=args.stages.split(",") if args.stages else None)
+    except NoPhase1Run as exc:
+        print(f"error: {exc}")
+        return 1
+
+    print(f"\nrun {out['run_id']} -> {out['status']}")
+    print(f"  as_of      {out.get('as_of')}")
+    print(f"  output     {out.get('output_dir')}")
+    for k, v in (out.get("counts") or {}).items():
+        print(f"  {k:<10} {v}")
+    print("\nstages")
+    for stage, info in out["stages"].items():
+        detail = ", ".join(f"{k}={v}" for k, v in info.items() if k != "status")
+        print(f"  {stage:<24} {info['status']:<9} {detail}")
+    return 0 if out["status"] == "complete" else 1
+
+
 def _cmd_runs(args) -> int:
     from .pipeline import runs as runs_mod
 
@@ -652,6 +682,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="continue the most recent unfinished run for this as_of")
     sc.add_argument("--stages", help="comma-separated subset of stage names")
     sc.set_defaults(func=_cmd_screen)
+
+    p2 = sub.add_parser("phase2",
+                        help="forensic and valuation validation of the Phase 1 "
+                             "candidates; narrows to 40-60")
+    p2.add_argument("--as-of", help="YYYY-MM-DD; defaults to today")
+    p2.add_argument("--force", action="store_true",
+                    help="run every stage even if its inputs are unchanged")
+    p2.add_argument("--resume", action="store_true",
+                    help="continue the most recent unfinished Phase 2 run")
+    p2.add_argument("--stages", help="comma-separated subset of stage names")
+    p2.set_defaults(func=_cmd_phase2)
 
     rn = sub.add_parser("runs", help="inspect and compare screening runs")
     rsub = rn.add_subparsers(dest="runs_command", required=True)

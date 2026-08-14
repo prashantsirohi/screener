@@ -116,12 +116,15 @@ def _record_artifacts(db: Database, ctx: RunContext, stage: str,
               a.row_count, a.sha256, a.bytes))
 
 
-def find_resumable(db: Database, as_of: date) -> str | None:
+def find_resumable(db: Database, as_of: date, phase: int = 1) -> str | None:
+    # Scoped by phase: without it, resuming a Phase 2 run could pick up an
+    # abandoned Phase 1 run for the same date and try to continue it with the
+    # wrong stage list.
     return db.fetch_value("""
         SELECT run_id FROM market.screen_run
-        WHERE  status = 'running' AND as_of_date = %s
+        WHERE  status = 'running' AND as_of_date = %s AND phase = %s
         ORDER  BY started_at DESC LIMIT 1
-    """, (as_of,))
+    """, (as_of, phase))
 
 
 def completed_stages(db: Database, run_id: str) -> set[str]:
@@ -135,28 +138,61 @@ def completed_stages(db: Database, run_id: str) -> set[str]:
 def run_phase1(settings: Settings, db: Database, *, as_of: date | None = None,
                force: bool = False, resume: bool = False,
                stages: list[str] | None = None) -> dict:
+    return _run(settings, db, phase=1, order=PIPELINE_ORDER, never_skip=NEVER_SKIP,
+                as_of=as_of, force=force, resume=resume, stages=stages,
+                counts=("evaluated", "eligible", "selected"))
+
+
+def run_phase2(settings: Settings, db: Database, *, as_of: date | None = None,
+               force: bool = False, resume: bool = False,
+               stages: list[str] | None = None) -> dict:
+    """
+    Phase 2 runs on the same machinery as Phase 1.
+
+    Run tracking, stage caching, resume, artifact checksums and the config-aware
+    input hash are all phase-agnostic, and a second copy of them would be a
+    second place for the cache to start crossing configurations.
+    """
+    from .stages import (s110_phase2_assess, s115_phase2_outputs,
+                         s120_phase2_summary, s125_phase2_qc)
+
+    order = [(s.STAGE, s.run) for s in (s110_phase2_assess, s115_phase2_outputs,
+                                        s120_phase2_summary, s125_phase2_qc)]
+    never = {s115_phase2_outputs.STAGE, s120_phase2_summary.STAGE,
+             s125_phase2_qc.STAGE}
+    return _run(settings, db, phase=2, order=order, never_skip=never,
+                as_of=as_of, force=force, resume=resume, stages=stages,
+                counts=("reviewed", "cleared", "selected"))
+
+
+def _run(settings: Settings, db: Database, *, phase: int,
+         order: list[tuple[str, Callable[[RunContext], StageResult]]],
+         never_skip: set[str], counts: tuple[str, ...],
+         as_of: date | None = None, force: bool = False, resume: bool = False,
+         stages: list[str] | None = None) -> dict:
     as_of = as_of or date.today()
 
-    run_id = find_resumable(db, as_of) if resume else None
+    run_id = find_resumable(db, as_of, phase) if resume else None
     done: set[str] = set()
     if run_id:
         done = completed_stages(db, run_id)
         log.info("resuming run %s; %d stage(s) already complete", run_id, len(done))
     else:
-        run_id = new_run_id(1, as_of)
+        run_id = new_run_id(phase, as_of)
 
-    ctx = RunContext(run_id=run_id, phase=1, as_of=as_of, settings=settings, db=db,
-                     params={"force": force, "stages": stages})
+    ctx = RunContext(run_id=run_id, phase=phase, as_of=as_of, settings=settings,
+                     db=db, params={"force": force, "stages": stages})
     ctx.state["started_at"] = datetime.now(IST).isoformat()
 
     fingerprint = data_fingerprint(db, as_of, settings)
     _open_run(db, ctx, fingerprint)
-    log.info("phase 1 run %s (as_of=%s, basis=%s)", run_id, as_of, settings.price_basis)
+    log.info("phase %d run %s (as_of=%s, basis=%s)", phase, run_id, as_of,
+             settings.price_basis)
 
     summary: dict[str, dict] = {}
     status = "complete"
 
-    for stage, fn in PIPELINE_ORDER:
+    for stage, fn in order:
         if stages and stage not in stages:
             continue
         if stage in done:
@@ -165,7 +201,7 @@ def run_phase1(settings: Settings, db: Database, *, as_of: date | None = None,
             continue
 
         input_hash = compute_input_hash({"stage": stage, **fingerprint})
-        if not force and stage not in NEVER_SKIP:
+        if not force and stage not in never_skip:
             prior = _previous_matching_run(db, stage, as_of, input_hash,
                                            settings.config_hash())
             if prior and prior != ctx.run_id:
@@ -206,10 +242,8 @@ def run_phase1(settings: Settings, db: Database, *, as_of: date | None = None,
             status = "partial"
         log.info("%s -> %s %s", stage, res.status, res.detail)
 
-    counts = {"evaluated": ctx.state.get("evaluated"),
-              "eligible": ctx.state.get("eligible"),
-              "selected": ctx.state.get("selected")}
-    _close_run(db, ctx, status, counts)
+    tally = {k: ctx.state.get(k) for k in counts}
+    _close_run(db, ctx, status, tally)
 
     return {"run_id": run_id, "status": status, "as_of": str(as_of),
-            "output_dir": str(ctx.output_dir()), "counts": counts, "stages": summary}
+            "output_dir": str(ctx.output_dir()), "counts": tally, "stages": summary}

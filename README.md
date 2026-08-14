@@ -17,9 +17,14 @@ auditable, and diffable against the last.
 sync  →  NSE bhavcopy, corporate actions, announcements, screener.in fundamentals
           ↓  (Postgres: point-in-time facts, append-only prices, hash-deduped events)
 screen →  eligibility → three-axis classification → 0-100 priority score
-          ↓
+          ↓  2,086 -> 150
 output →  P1_screened_universe.csv, P1_candidates.csv, P1_source_log.csv,
           P1_summary.md, P1_run_manifest.json
+          ↓
+phase2 →  forensic checks over statement history + five valuation methods
+          ↓  150 -> 40-60
+output →  P2_reviewed.csv, P2_advancing.csv, P2_evidence.csv,
+          P2_summary.md, P2_run_manifest.json
 ```
 
 The screen classifies each company on three independent axes:
@@ -40,9 +45,15 @@ the queue, and each run records whether the floor or the target bound it.
 
 ## Current state
 
-Phase 1 is complete and passes **368 tests**. Phases 2 (forensic validation and
-valuation) and 3 (technical confirmation and portfolio construction) are not
-built; the schema and point-in-time design do not preclude them.
+Phases 1 and 2 are complete and pass **410 tests**. Phase 3 (technical
+confirmation and portfolio construction) is not built; the schema and
+point-in-time design do not preclude it.
+
+**Phase 2 does not read filings.** Auditor qualifications, related-party
+transactions, promoter pledging and CWIP ageing all need the annual report, and
+no filing has been fetched. Every check is computed from statement history, and
+each advancing name carries an explicit list of what a filing would still have
+to answer. A clean forensic score means *nothing visible in the statements*.
 
 A representative run:
 
@@ -110,6 +121,7 @@ depth at any point.
 | `rebuild-facts` | Re-explode facts from retained payloads. Replays a **mapping** fix |
 | `metrics [--snapshot] [--strict]` | Metric-label drift: renames, vanished rows, unit changes, coverage collapses |
 | `screen [--as-of] [--force] [--resume] [--stages]` | Run Phase 1 and emit the hand-off |
+| `phase2 [--as-of] [--force] [--resume] [--stages]` | Forensic and valuation validation of the Phase 1 candidates; narrows to 40-60 |
 | `runs list \| show <id> \| diff <a> <b> \| prune` | Inspect and compare runs |
 | `export-parquet` | Materialise the source tables for the offline analytics mode |
 | `import-legacy-cache` | One-off import of the original JSON caches |
